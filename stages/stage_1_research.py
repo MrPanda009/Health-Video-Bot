@@ -25,7 +25,7 @@ import time
 import asyncio
 import math
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -91,7 +91,7 @@ def load_niche_profile() -> dict:
 
 def save_job(job: dict) -> None:
     path = Path(JOBS_DIR) / f"{job['job_id']}.json"
-    job["updated_at"] = datetime.utcnow().isoformat()
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
     with open(path, "w", encoding="utf-8") as f:
         json.dump(job, f, ensure_ascii=False, indent=2)
 
@@ -102,8 +102,8 @@ def create_job(topic: str) -> dict:
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "status": "created",
         "error": None,
         "study": None,
@@ -346,16 +346,23 @@ def build_full_study(pmid: str, summaries: list[dict], topic: str, query: str) -
 
 def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
     """
-    Download PDF from PubMed Central (open access only).
+    Download PDF using the NCBI Open Access FTP service.
+    This is the correct, API-sanctioned method — the direct PMC PDF URL
+    blocks automated access with a 403. The OA service returns a proper
+    FTP path for every open-access paper.
+
+    API docs: https://www.ncbi.nlm.nih.gov/pmc/tools/oa-service/
     Returns local path on success, None on failure.
     Assets saved to: assets/{job_id}/pdf/
     """
     if not study.full_text_available:
         print(f"[Stage 1] No free full text for PMID {study.pmid} — skipping PDF")
         return None
+
     try:
-        handle = Entrez.elink(dbfrom="pubmed", db="pmc", id=study.pmid)
-        record = Entrez.read(handle)
+        # Step 1: Get PMC ID from Entrez elink
+        handle  = Entrez.elink(dbfrom="pubmed", db="pmc", id=study.pmid)
+        record  = Entrez.read(handle)
         handle.close()
 
         pmc_ids = []
@@ -365,23 +372,107 @@ def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
                     pmc_ids = [l["Id"] for l in link.get("Link", [])]
 
         if not pmc_ids:
-            print(f"[Stage 1] PMC ID not found for PMID {study.pmid}")
+            print(f"[Stage 1] PMC ID not found for PMID {study.pmid} — skipping PDF")
             return None
 
-        pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmc_ids[0]}/pdf/"
-        resp = requests.get(pdf_url, timeout=30, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; HealthVideoBot/1.0)"
-        })
+        pmc_id = f"PMC{pmc_ids[0]}"
+        print(f"[Stage 1] Found {pmc_id}, querying OA service...")
 
-        if resp.status_code == 200 and "pdf" in resp.headers.get("content-type", ""):
-            pdf_dir  = Path(ASSETS_DIR) / job_id / "pdf"
+        # Step 2: Query NCBI OA service for the actual download URL
+        # This returns an XML with an <link format="pdf"> element pointing to
+        # the real FTP/HTTPS download path
+        oa_resp = requests.get(
+            "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
+            params={"id": pmc_id, "format": "pdf"},
+            timeout=15,
+            headers={"User-Agent": "HealthVideoBot/1.0 (mailto:" + os.getenv("ENTREZ_EMAIL", "bot@example.com") + ")"}
+        )
+
+        if oa_resp.status_code != 200:
+            print(f"[Stage 1] OA service returned HTTP {oa_resp.status_code}")
+            return None
+
+        # Step 3: Parse the XML response to get the download href
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(oa_resp.text)
+
+        # Check for error element
+        error_el = root.find(".//error")
+        if error_el is not None:
+            print(f"[Stage 1] OA service error: {error_el.text} — PDF not available for {pmc_id}")
+            return None
+
+        # Find the PDF link — format attribute is "pdf"
+        pdf_link = root.find(".//link[@format='pdf']")
+        if pdf_link is None:
+            # Fallback: try tgz (full package) — PDF is inside
+            print(f"[Stage 1] No direct PDF link from OA service for {pmc_id} — trying tgz")
+            tgz_link = root.find(".//link[@format='tgz']")
+            if tgz_link is None:
+                print(f"[Stage 1] No downloadable package found for {pmc_id}")
+                return None
+            download_url = tgz_link.get("href", "")
+        else:
+            download_url = pdf_link.get("href", "")
+
+        if not download_url:
+            print(f"[Stage 1] OA service returned empty href for {pmc_id}")
+            return None
+
+        # FTP URLs need to be converted to HTTPS for requests
+        # NCBI FTP mirrors at ftp.ncbi.nlm.nih.gov also available via HTTPS
+        if download_url.startswith("ftp://"):
+            download_url = download_url.replace("ftp://", "https://", 1)
+
+        print(f"[Stage 1] Downloading PDF from: {download_url[:70]}...")
+
+        # Step 4: Download the file
+        dl_resp = requests.get(
+            download_url,
+            timeout=60,
+            headers={"User-Agent": "HealthVideoBot/1.0"},
+            stream=True
+        )
+
+        if dl_resp.status_code != 200:
+            print(f"[Stage 1] PDF download failed (HTTP {dl_resp.status_code})")
+            return None
+
+        content_type = dl_resp.headers.get("content-type", "")
+        pdf_dir  = Path(ASSETS_DIR) / job_id / "pdf"
+
+        if "pdf" in content_type or download_url.endswith(".pdf"):
             pdf_path = str(pdf_dir / f"{study.pmid}.pdf")
             with open(pdf_path, "wb") as f:
-                f.write(resp.content)
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
             print(f"[Stage 1] PDF saved: {pdf_path}")
             return pdf_path
+
+        elif "tgz" in content_type or download_url.endswith(".tar.gz"):
+            # Extract PDF from the tgz package
+            import tarfile, io
+            tgz_path = str(pdf_dir / f"{study.pmid}.tar.gz")
+            with open(tgz_path, "wb") as f:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            with tarfile.open(tgz_path, "r:gz") as tar:
+                pdf_members = [m for m in tar.getmembers() if m.name.endswith(".pdf")]
+                if pdf_members:
+                    pdf_member = pdf_members[0]
+                    extracted = tar.extractfile(pdf_member)
+                    if extracted:
+                        pdf_path = str(pdf_dir / f"{study.pmid}.pdf")
+                        with open(pdf_path, "wb") as f:
+                            f.write(extracted.read())
+                        print(f"[Stage 1] PDF extracted from tgz: {pdf_path}")
+                        os.remove(tgz_path)
+                        return pdf_path
+            print(f"[Stage 1] No PDF found inside tgz for {pmc_id}")
+            return None
+
         else:
-            print(f"[Stage 1] PDF download failed (HTTP {resp.status_code})")
+            print(f"[Stage 1] Unexpected content type: {content_type}")
             return None
 
     except Exception as e:
@@ -392,47 +483,114 @@ def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
 # ─── Part 7: Screenshot via Playwright ───────────────────────────────────────
 
 async def _screenshot_abstract(pmid: str, job_id: str) -> list[str]:
-    """Internal async implementation. Call via screenshot_pubmed_abstract()."""
+    """
+    Screenshot the PubMed abstract page using Playwright.
+
+    Key fixes vs naive implementation:
+    - Use a real browser User-Agent (PubMed detects headless Chromium by default)
+    - Disable the 'webdriver' navigator property that sites use to detect bots
+    - Wait for DOM content rather than 'networkidle' (more reliable, less timeout-prone)
+    - Try multiple selectors in priority order for resilience against PubMed UI changes
+    - Scroll abstract into view before screenshotting
+    """
     screenshot_dir = Path(ASSETS_DIR) / job_id / "screenshots"
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     paths = []
 
+    # Real Chrome User-Agent — PubMed rejects obvious headless UA strings
+    USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page    = await browser.new_page(viewport={"width": 1280, "height": 900})
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-blink-features=AutomationControlled",  # Hide webdriver flag
+            ]
+        )
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent=USER_AGENT,
+            locale="en-US",
+            timezone_id="America/New_York",
+        )
+
+        # Mask navigator.webdriver — the primary bot detection signal
+        await context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
+        page = await context.new_page()
+
         try:
+            print(f"[Stage 1] Opening PubMed for PMID {pmid}...")
             await page.goto(
                 f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                wait_until="networkidle",
+                wait_until="domcontentloaded",   # More reliable than networkidle
                 timeout=30000
             )
-            await page.wait_for_timeout(1500)
 
-            # Abstract section
-            try:
-                await page.locator("#abstract").wait_for(timeout=5000)
-                path = str(screenshot_dir / f"{pmid}_abstract.png")
-                await page.locator("#abstract").screenshot(path=path)
-                paths.append(path)
-                print(f"[Stage 1] Abstract screenshot saved")
-            except Exception:
-                path = str(screenshot_dir / f"{pmid}_fullpage.png")
+            # Give JS a moment to render dynamic content
+            await page.wait_for_timeout(2000)
+
+            # ── Abstract screenshot ──────────────────────────────────────────
+            # Try selectors in priority order — PubMed has changed these before
+            abstract_selectors = [
+                "#abstract",
+                ".abstract-content",
+                "[data-section-type='abstract']",
+                ".abstract",
+            ]
+
+            abstract_captured = False
+            for selector in abstract_selectors:
+                try:
+                    el = page.locator(selector).first
+                    await el.wait_for(state="visible", timeout=4000)
+                    await el.scroll_into_view_if_needed()
+                    await page.wait_for_timeout(300)  # Brief settle after scroll
+                    path = str(screenshot_dir / f"{pmid}_abstract.png")
+                    await el.screenshot(path=path)
+                    paths.append(path)
+                    print(f"[Stage 1] Abstract screenshot saved (selector: {selector})")
+                    abstract_captured = True
+                    break
+                except Exception:
+                    continue
+
+            if not abstract_captured:
+                # Last resort: full viewport screenshot
+                print(f"[Stage 1] All abstract selectors failed — taking viewport screenshot")
+                path = str(screenshot_dir / f"{pmid}_viewport.png")
                 await page.screenshot(path=path, full_page=False)
                 paths.append(path)
-                print(f"[Stage 1] Full-page fallback screenshot saved")
 
-            # Metadata/citation section (optional)
-            try:
-                await page.locator(".article-source").wait_for(timeout=3000)
-                path = str(screenshot_dir / f"{pmid}_metadata.png")
-                await page.locator(".article-source").screenshot(path=path)
-                paths.append(path)
-            except Exception:
-                pass
+            # ── Metadata screenshot (journal, authors, date) ─────────────────
+            meta_selectors = [
+                ".article-source",
+                ".citation-authors",
+                "#full-view-heading",
+            ]
+            for selector in meta_selectors:
+                try:
+                    el = page.locator(selector).first
+                    await el.wait_for(state="visible", timeout=3000)
+                    path = str(screenshot_dir / f"{pmid}_metadata.png")
+                    await el.screenshot(path=path)
+                    paths.append(path)
+                    print(f"[Stage 1] Metadata screenshot saved")
+                    break
+                except Exception:
+                    continue
 
         except Exception as e:
             print(f"[Stage 1] Screenshot error: {e}")
         finally:
+            await context.close()
             await browser.close()
 
     return paths
