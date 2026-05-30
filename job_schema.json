@@ -1,0 +1,115 @@
+{
+    "_meta": {
+        "description": "This is the canonical schema for a pipeline job object. Every field that any stage will ever write is defined here with its type and which stage populates it. Stages must never add ad-hoc fields outside this schema.",
+        "version": "1.0"
+    },
+    "job_id": "string — uuid4, assigned at job creation",
+    "created_at": "ISO 8601 datetime",
+    "updated_at": "ISO 8601 datetime",
+    "status": "one of: created | stage_1_complete | stage_2_complete | stage_3_complete | stage_4_complete | stage_5_complete | complete | error",
+    "error": {
+        "stage": "string — which stage failed",
+        "message": "string — error message",
+        "retries": "int — how many times this stage was retried"
+    },
+    "study": {
+        "topic": "string — topic from niche_profile.topic_rotation that seeded this search",
+        "pubmed_query": "string — exact query sent to PubMed",
+        "pmid": "string — PubMed ID",
+        "doi": "string",
+        "title": "string",
+        "authors": "list of strings",
+        "journal": "string",
+        "year": "int",
+        "study_type": "one of: meta_analysis | systematic_review | rct | cohort | cross_sectional | other",
+        "abstract": "string — full abstract text",
+        "full_text_available": "bool",
+        "pdf_path": "string — local path or null",
+        "screenshot_paths": "list of strings — local paths to figure/abstract screenshots",
+        "industry_funded": "bool or null if unknown",
+        "funding_source": "string or null"
+    },
+    "claims": {
+        "core_finding": "string — one sentence, exactly what the study found",
+        "effect_size": "string — exact number with units e.g. '23% reduction' or 'HR 0.78'",
+        "sample_size": "int",
+        "population_description": "string — who was studied",
+        "follow_up_duration": "string or null — e.g. '12 weeks', '5 years'",
+        "primary_limitations": "list of strings",
+        "what_study_does_not_prove": "string — explicit statement",
+        "is_causal_language_safe": "bool — false if observational study",
+        "small_study_flag": "bool — true if sample_size < threshold in niche_profile",
+        "industry_funded_flag": "bool",
+        "key_stats": "list of strings — supporting statistics beyond the primary finding"
+    },
+    "content": {
+        "hindi_script": "string — full voiceover script in Hindi",
+        "script_segments": [
+            {
+                "name": "string — segment name matching niche_profile segment_structure",
+                "hindi_text": "string",
+                "duration_hint_seconds": "int",
+                "broll_mood": "string — matches niche_profile broll_mood_map"
+            }
+        ],
+        "title": "string — YouTube title in Hindi, under 60 chars",
+        "description": "string — full YouTube description",
+        "tags": "list of strings — 15 tags mixing Hindi and English",
+        "broll_search_tags": [
+            {
+                "segment_name": "string",
+                "search_terms": "list of strings — English terms for Pexels/Pixabay"
+            }
+        ],
+        "thumbnail_prompts": [
+            {
+                "variant_id": "string — data_visual | human_lifestyle | concept_abstract",
+                "prompt": "string — English image generation prompt"
+            }
+        ],
+        "chapter_timestamps": [
+            {
+                "title": "string",
+                "estimated_start_seconds": "int"
+            }
+        ],
+        "validation_passed": "bool",
+        "validation_notes": "list of strings — any warnings from Pydantic validation"
+    },
+    "assets": {
+        "broll_video_paths": [
+            {
+                "segment_name": "string",
+                "paths": "list of strings — 2 downloaded options per segment"
+            }
+        ],
+        "thumbnail_paths": [
+            {
+                "variant_id": "string",
+                "path": "string"
+            }
+        ],
+        "voiceover_path": "string — path to WAV file",
+        "voiceover_duration_seconds": "float",
+        "srt_path": "string — path to SRT caption file",
+        "ass_path": "string — path to ASS burn-in caption file",
+        "whisper_word_timestamps": "list — raw Whisper output, segment-level timestamps",
+        "background_music_path": "string — path to selected track from local library"
+    },
+    "output": {
+        "final_video_path": "string",
+        "final_video_duration_seconds": "float",
+        "quality_checks": {
+            "duration_in_range": "bool",
+            "disclaimer_present": "bool",
+            "audio_peak_ok": "bool",
+            "audio_avg_ok": "bool",
+            "all_passed": "bool"
+        },
+        "youtube_upload_id": "string — YouTube video ID after upload",
+        "youtube_url": "string",
+        "scheduled_publish_time": "ISO 8601 datetime",
+        "thumbnails_uploaded": "list of strings — YouTube thumbnail IDs",
+        "srt_uploaded": "bool"
+    }
+}

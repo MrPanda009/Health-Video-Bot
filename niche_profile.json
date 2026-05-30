@@ -1,0 +1,255 @@
+{
+    "_meta": {
+        "version": "1.0",
+        "last_updated": "2026-05-30",
+        "description": "Niche profile for Hindi health education channel. Every pipeline stage reads from this file. Do not hardcode any of these values inside stage scripts."
+    },
+    "channel": {
+        "name": "Health hub",
+        "youtube_channel_id": "YOUR_CHANNEL_ID",
+        "language": "hi",
+        "country": "IN",
+        "youtube_category_id": "26",
+        "made_for_kids": false,
+        "default_audience": "middle_aged_older_adults"
+    },
+    "editorial": {
+        "target_audience_description": "Hindi-speaking middle-aged and older adults (35-65) managing or preventing chronic conditions like diabetes, hypertension, and heart disease. Generally comfortable with Hindi medical terminology. May have low health literacy but high motivation to act on credible information.",
+        "topics": [
+            "nutrition_and_diet",
+            "mental_health_and_sleep",
+            "chronic_disease",
+            "fitness_and_exercise",
+            "gut_health_and_immunity",
+            "womens_health"
+        ],
+        "tone": "friendly_educator",
+        "tone_description": "Like a knowledgeable friend who happens to have a medical background. Never condescending, never alarmist. Speaks directly — 'aapko' not 'logon ko'. Makes the listener feel informed and capable, not scared.",
+        "terminology_style": "hindi_medical_terms",
+        "terminology_rules": [
+            "Use Hindi medical terms where standard ones exist (e.g. 'madhumeh' for diabetes, 'raktachaap' for blood pressure, 'hriday' for heart)",
+            "If a term has no common Hindi equivalent, use the English term followed by a short Hindi parenthetical explanation on first use only",
+            "Never use jargon without explanation. Every term introduced must have context from the surrounding sentence",
+            "Avoid passive constructions — prefer active, direct phrasing"
+        ]
+    },
+    "script": {
+        "format": "shorts",
+        "target_duration_seconds": 55,
+        "target_word_count_hindi": 130,
+        "segment_structure": [
+            {
+                "name": "hook",
+                "duration_seconds": 5,
+                "purpose": "Open with the core surprising finding as a direct statement or rhetorical question. Must reference the study immediately. No generic openers like 'Aaj hum baat karenge'.",
+                "example_openings": [
+                    "Ek naye shodh mein paaya gaya ki...",
+                    "Kya aap jaante hain ki sirf [X] din mein...",
+                    "[N] hazaar logon par kiye gaye adhyayan ne sabit kiya ki..."
+                ]
+            },
+            {
+                "name": "context",
+                "duration_seconds": 10,
+                "purpose": "Who conducted the study, how many people were studied, what type of study it was. Build credibility. Mention the journal name in Hindi phonetic form if well-known (e.g. 'The Lancet' stays as is)."
+            },
+            {
+                "name": "finding",
+                "duration_seconds": 20,
+                "purpose": "The core result with exact numbers. This is the most important segment. Must include effect size or percentage. Must not overstate causal direction if study is observational."
+            },
+            {
+                "name": "caveat",
+                "duration_seconds": 10,
+                "purpose": "What the study does NOT prove. Study limitations. Who this does or doesn't apply to. This segment is non-negotiable — every video must have it. Framed constructively, not as a takedown of the finding."
+            },
+            {
+                "name": "actionable_takeaway",
+                "duration_seconds": 7,
+                "purpose": "One concrete, safe action the viewer can take based on the evidence. Must be framed as a suggestion ('aap koshish kar sakte hain') not a prescription ('aapko karna chahiye'). Never recommend stopping medications or substituting professional advice."
+            },
+            {
+                "name": "cta",
+                "duration_seconds": 3,
+                "purpose": "Subscribe + comment CTA. Keep it natural, not robotic. One of the pre-approved CTA variants below.",
+                "cta_variants": [
+                    "Agar yeh jaankari useful lagi, toh channel ko subscribe karein aur comment mein batayein ki aap kis topic par aur jaanna chahte hain.",
+                    "Is video ko apne kisi khaas insaan ke saath share karein jise yeh jaankari kaam aa sakti hai.",
+                    "Neeche comment mein apna sawaal likhein — hum agli video mein jawab dene ki koshish karenge."
+                ]
+            }
+        ],
+        "absolute_prohibitions": [
+            "Never use causal language ('causes', 'cures', 'prevents') for observational studies",
+            "Never recommend stopping or modifying prescribed medications",
+            "Never make absolute health claims without qualifying with 'shodh ke anusaar' or 'adhyayan mein paaya gaya'",
+            "Never reference a study without mentioning sample size somewhere in the script",
+            "Never open with 'Namaste doston, aaj ki video mein' or similar generic openers",
+            "Never end with 'Toh yeh thi aaj ki jaankari' or similar filler closings"
+        ]
+    },
+    "visuals": {
+        "broll_style": "realistic_lifestyle",
+        "broll_style_description": "Real people doing real things. Prefer footage of South Asian or racially ambiguous individuals aged 35-65. Avoid obviously Western stock footage (blonde people in gyms, US hospital interiors). Prefer natural lighting, home or outdoor settings.",
+        "broll_mood_map": {
+            "hook": "striking, high-contrast, close-up detail shot",
+            "context": "neutral, clinical but approachable — lab, doctor-patient, reading",
+            "finding": "direct illustration of the topic — food, exercise, sleep, body",
+            "caveat": "thoughtful, calm — person thinking, doctor consulting",
+            "actionable_takeaway": "positive, active — person doing the recommended action",
+            "cta": "warm, community — group of people, family"
+        },
+        "preferred_sources": [
+            "pexels",
+            "pixabay"
+        ],
+        "minimum_resolution": "1920x1080",
+        "minimum_clip_duration_seconds": 5,
+        "orientation": "portrait_preferred",
+        "portrait_fallback": "crop_landscape_to_916",
+        "avoid_in_broll": [
+            "Syringes or blood unless directly relevant",
+            "Overweight people used to illustrate disease (avoid stigmatizing imagery)",
+            "Hospital ICU or emergency settings unless directly relevant",
+            "Stock photos of people faking illness"
+        ]
+    },
+    "thumbnail": {
+        "dimensions": "1280x720",
+        "variants_to_generate": 3,
+        "style_variants": [
+            {
+                "id": "data_visual",
+                "description": "Bold statistic or percentage as the dominant text element, clean background, one supporting icon or minimal illustration. High contrast."
+            },
+            {
+                "id": "human_lifestyle",
+                "description": "A real-looking person (South Asian, middle-aged) in a relatable health context. Warm tones. Facial expression is curious or relieved, not alarmed."
+            },
+            {
+                "id": "concept_abstract",
+                "description": "A clean metaphorical visual representing the study topic. E.g. a gut represented as a garden, a brain as a glowing network. Minimal text overlay."
+            }
+        ],
+        "text_overlay_rules": [
+            "Maximum 6 words on thumbnail",
+            "Must be readable at 120x68px (YouTube mobile thumbnail size)",
+            "No red circles or arrows — overused and flagged by YouTube quality systems",
+            "Hindi text preferred on thumbnail for audience signal"
+        ],
+        "ab_test": true
+    },
+    "audio": {
+        "tts_provider": "sarvam_ai",
+        "sarvam_voice_id": "Aayan",
+        "sarvam_model": "bulbul:v3",
+        "speaking_rate": 1.0,
+        "pitch": 0,
+        "loudness": 1.5,
+        "background_music": {
+            "enabled": true,
+            "volume_ratio": 0.12,
+            "mood": "calm_informative",
+            "source": "local_library",
+            "notes": "Manually curate 5-8 royalty-free tracks from Pixabay Music. Store in /assets/music/. Do not automate music selection — pick once, rotate across videos."
+        }
+    },
+    "captions": {
+        "burn_in": true,
+        "upload_srt": true,
+        "whisper_model": "large-v3",
+        "language": "hi",
+        "style": {
+            "font": "Noto Sans Devanagari",
+            "font_size": 48,
+            "position": "bottom_center",
+            "margin_bottom_percent": 8,
+            "outline_color": "black",
+            "outline_width": 2,
+            "highlight_current_word": true,
+            "highlight_color": "#FFD700"
+        }
+    },
+    "compliance": {
+        "medical_disclaimer": {
+            "text_hindi": "यह वीडियो केवल शैक्षिक उद्देश्यों के लिए है। किसी भी स्वास्थ्य संबंधी निर्णय के लिए अपने चिकित्सक से परामर्श लें।",
+            "text_english": "This video is for educational purposes only. Consult your doctor before making any health decisions.",
+            "placement": "first_3_seconds_overlay",
+            "also_in_description": true
+        },
+        "ai_disclosure": {
+            "required": true,
+            "youtube_flag": "VIDEO_AI_GENERATED_CONTENT",
+            "description_text": "This video was created with AI assistance. All health claims are sourced from peer-reviewed research cited in the description."
+        },
+        "study_citation_format": "{authors} ({year}). {title}. {journal}. {doi_or_pmid}",
+        "industry_funding_disclosure": "Agar yeh adhyayan kisi company dwara funded tha, toh script mein yeh zaroor mention karein.",
+        "observational_study_language_rule": "If study_type is observational or cross-sectional, script must use 'sambandh paaya gaya' (association found) not 'sabit hua ki' (proven that)"
+    },
+    "youtube_upload": {
+        "default_tags_always_include": [
+            "health hindi",
+            "swasthya",
+            "sehat",
+            "hindi health tips",
+            "research based health",
+            "shodh aadharit swasthya"
+        ],
+        "description_template_sections": [
+            "video_summary_2_lines",
+            "study_citation",
+            "timestamps_if_longform",
+            "medical_disclaimer",
+            "ai_disclosure",
+            "subscribe_cta"
+        ],
+        "publish_delay_hours": 18,
+        "schedule_time_of_day": "08:00",
+        "schedule_timezone": "Asia/Kolkata",
+        "upload_frequency_per_week": 3
+    },
+    "quality_gate": {
+        "min_duration_seconds": 45,
+        "max_duration_seconds": 65,
+        "required_elements": [
+            "medical_disclaimer_present",
+            "sample_size_mentioned_in_script",
+            "caveat_segment_present",
+            "study_citation_in_description",
+            "ai_disclosure_flag_set"
+        ],
+        "audio_checks": {
+            "max_peak_dbfs": -1.0,
+            "min_avg_dbfs": -18.0
+        }
+    },
+    "research": {
+        "preferred_study_types_ranked": [
+            "meta_analysis",
+            "systematic_review",
+            "randomized_controlled_trial",
+            "cohort_study",
+            "cross_sectional"
+        ],
+        "minimum_sample_size": 100,
+        "recency_months": 24,
+        "small_study_flag_threshold": 500,
+        "sources": [
+            "pubmed",
+            "semantic_scholar",
+            "pmc_open_access"
+        ],
+        "topic_rotation": [
+            "type 2 diabetes diet intervention",
+            "sleep quality chronic disease",
+            "gut microbiome nutrition",
+            "hypertension lifestyle modification",
+            "physical activity older adults India",
+            "mental health yoga meditation RCT",
+            "heart disease prevention diet",
+            "menopause nutrition intervention",
+            "protein intake aging muscle",
+            "intermittent fasting metabolic health"
+        ]
+    }
+}
