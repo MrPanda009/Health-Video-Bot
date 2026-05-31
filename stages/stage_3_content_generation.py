@@ -38,6 +38,7 @@ load_dotenv()
 NICHE_PROFILE_PATH = os.getenv("NICHE_PROFILE_PATH", "niche_profile.json")
 JOBS_DIR           = os.getenv("JOBS_DIR", "jobs")
 LLM_MODEL          = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "auto").lower()
 
 
 def _get_llm_client():
@@ -45,6 +46,12 @@ def _get_llm_client():
     if model.startswith("claude"):
         import anthropic
         return "anthropic", anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    elif LLM_PROVIDER == "groq":
+        from openai import OpenAI
+        return "groq", OpenAI(
+            api_key=os.getenv("GROQ_API_KEY"),
+            base_url="https://api.groq.com/openai/v1",
+        )
     else:
         from openai import OpenAI
         return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
