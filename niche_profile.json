@@ -141,7 +141,7 @@
     },
     "audio": {
         "tts_provider": "sarvam_ai",
-        "sarvam_voice_id": "Aayan",
+        "sarvam_voice_id": "aayan",
         "sarvam_model": "bulbul:v3",
         "speaking_rate": 1.0,
         "pitch": 0,

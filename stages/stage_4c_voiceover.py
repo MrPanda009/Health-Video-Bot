@@ -135,21 +135,26 @@ def call_sarvam_tts(text: str, profile: dict) -> bytes:
         "api-subscription-key": api_key,
         "Content-Type": "application/json",
     }
+    model = audio_cfg.get("sarvam_model", "bulbul:v1")
     payload = {
         "inputs":               [text],
         "target_language_code": "hi-IN",
         "speaker":              audio_cfg["sarvam_voice_id"],
         "pace":                 audio_cfg.get("speaking_rate", 1.0),
-        "pitch":                audio_cfg.get("pitch", 0),
-        "loudness":             audio_cfg.get("loudness", 1.5),
-        "model":                audio_cfg.get("sarvam_model", "bulbul:v1"),
+        "model":                model,
     }
+    # bulbul:v3 does not support pitch/loudness
+    if not model.endswith(":v3"):
+        payload["pitch"]    = audio_cfg.get("pitch", 0)
+        payload["loudness"] = audio_cfg.get("loudness", 1.5)
 
     last_exc = None
     for attempt in range(1, 3):
         try:
             print(f"[Stage 4c]   TTS attempt {attempt} ({len(text)} chars)...")
             resp = requests.post(SARVAM_TTS_URL, headers=headers, json=payload, timeout=60)
+            if not resp.ok:
+                print(f"[Stage 4c]   TTS response body: {resp.text[:500]}")
             resp.raise_for_status()
             data = resp.json()
             if not data.get("audios"):
