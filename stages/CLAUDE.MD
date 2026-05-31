@@ -11,7 +11,7 @@ Stages 1–3 are complete. This file focuses on Stages 4a–4d, 5, and 6.
 
 **Input:** `job["content"]["broll_search_tags"]` — list of `{segment_name, search_terms}`
 **Output:** `job["assets"]["broll_video_paths"]` — list of `{segment_name, paths: [path1, path2]}`
-**Status:** `stage_4_complete` (set after ALL stage 4 sub-stages are done — see orchestrator)
+**Status:** `stage_4_complete` (set by the frontend API after ALL stage 4 sub-stages complete)
 
 ### What it does
 For each segment in `broll_search_tags`:
@@ -422,45 +422,3 @@ body["status"]["privacyStatus"] = "private"
 body["status"]["publishAt"] = publish_time
 ```
 
----
-
-## Orchestrator (`orchestrator.py`)
-
-Runs all stages in sequence. Build this last.
-
-```python
-import subprocess, sys, json
-from pathlib import Path
-
-def run_stage(script_path: str, job_id: str) -> bool:
-    result = subprocess.run(
-        [sys.executable, script_path, job_id],
-        capture_output=False
-    )
-    job = json.load(open(f"jobs/{job_id}.json"))
-    return job["status"] != "error"
-
-def run_pipeline(job_id: str):
-    stages = [
-        "stages/stage_1_research.py",
-        "stages/stage_2_claim_extraction.py",
-        "stages/stage_3_content_generation.py",
-        # Stage 4 sub-stages — run concurrently via multiprocessing or threads
-        "stages/stage_4a_broll.py",
-        "stages/stage_4b_thumbnail.py",
-        "stages/stage_4c_voiceover.py",
-        # Stage 4d must run after 4c (needs the WAV file)
-        "stages/stage_4d_captions.py",
-        "stages/stage_5_assembly.py",
-        "stages/stage_6_upload.py",
-    ]
-    for stage in stages:
-        print(f"\n{'='*50}\nRunning {stage}\n{'='*50}")
-        if not run_stage(stage, job_id):
-            print(f"Pipeline aborted at {stage}")
-            return False
-    return True
-```
-
-For parallel Stage 4a/4b/4c, use `concurrent.futures.ThreadPoolExecutor` or `multiprocessing`.
-4d must wait for 4c to finish. After all 4 sub-stages, set `job["status"] = "stage_4_complete"`.

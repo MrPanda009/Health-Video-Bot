@@ -22,7 +22,6 @@ health_video_bot/
 ├── job_schema.json                  ← canonical job state shape
 ├── .env                             ← API keys (never commit)
 ├── requirements.txt
-├── orchestrator.py                  ← runs all stages in sequence (build last)
 │
 ├── stages/
 │   ├── CLAUDE.md                    ← stage-specific context
@@ -82,12 +81,13 @@ created → stage_1_complete → stage_2_complete → stage_3_complete
 [Stage 4a] Pexels/Pixabay B-roll download → assets.broll_video_paths
 [Stage 4b] AI image generation → assets.thumbnail_paths
 [Stage 4c] Sarvam AI TTS → assets.voiceover_path
-[Stage 4d] Whisper → SRT + ASS captions → assets.srt_path, ass_path
+[Stage 4d] Whisper → SRT + ASS captions → assets.srt_path, ass_path  ← SKIPPED FOR NOW
 [Stage 5]  FFmpeg assembly + quality gate → output.final_video_path
 [Stage 6]  YouTube Data API v3 upload → output.youtube_upload_id
 ```
 
-Stages 4a–4d can run in parallel (they all read from `content{}` and write to `assets{}`).
+Stages 4a–4c can run in parallel. Stage 4d is skipped for now — Stage 5 handles its
+absence gracefully (uses `duration_hint_seconds` for timing, skips ASS caption burn-in).
 
 ---
 
@@ -223,40 +223,37 @@ if __name__ == "__main__":
 - Aborts if causal language found in observational study script
 - Writes `content{}` block, sets `status: stage_3_complete`
 
+### Stage 4a — `stages/stage_4a_broll.py` ✅
+- Pexels API first, Pixabay fallback. 2 clips per segment. Cache by search term.
+- Does NOT change job status (frontend API sets stage_4_complete after all 4x sub-stages complete)
+
+### Stage 4b — `stages/stage_4b_thumbnail.py` ✅
+- 3 thumbnail prompts from content{}, send to DALL-E 3 or Vertex Imagen, resize to 1280×720
+- Does NOT change job status
+
+### Stage 4c — `stages/stage_4c_voiceover.py` ✅
+- Splits hindi_script into ≤500-char chunks at sentence boundaries
+- Calls Sarvam AI TTS for each chunk (bulbul:v3, retry once on failure)
+- Concatenates WAVs with pydub, measures duration
+- Does NOT change job status
+
+### Stage 4d — `stages/stage_4d_captions.py` ⏭ SKIPPED
+- Would run Whisper to get word-level timestamps → SRT + ASS files
+- Stage 5 handles its absence: uses `duration_hint_seconds` for timing, skips ASS burn-in
+
+### Stage 5 — `stages/stage_5_assembly.py` ✅
+- Assembles 1080×1920 portrait video for YouTube Shorts
+- Disclaimer card (3s) → B-roll/screenshots per segment → voiceover audio → optional music
+- Accepts `stage_4_complete` or `stage_3_complete` (dev mode with manually placed assets)
+- Quality gate: duration, audio levels via ffprobe/volumedetect
+- Sets `status: stage_5_complete`
+
 ---
 
 ## What needs to be built next
 
-Build in this order (not the stage number order):
-
-### Recommended build order
-1. **Stage 5** — video assembly with *placeholder* assets (manually place files)
-   → Get a real video file rendered before worrying about automation
-2. **Stage 6** — YouTube upload
-   → Confirm the API works end-to-end
-3. **Stages 4a–4d** — now automate the asset generation
-4. **Orchestrator** — wire it all together
-
-### Stage 4a — `stages/stage_4a_broll.py` (TODO)
-See `stages/CLAUDE.md` for full spec.
-Short version: Pexels API first, Pixabay fallback. 2 clips per segment. Cache by search term.
-
-### Stage 4b — `stages/stage_4b_thumbnail.py` (TODO)
-See `stages/CLAUDE.md` for full spec.
-Short version: 3 thumbnail prompts from content{}, send to image generation API, save 1280×720.
-
-### Stage 4c — `stages/stage_4c_voiceover.py` (TODO)
-See `stages/CLAUDE.md` for full spec.
-Short version: Sarvam AI TTS, hindi_script → WAV, save to assets/{job_id}/audio/.
-
-### Stage 4d — `stages/stage_4d_captions.py` (TODO)
-See `stages/CLAUDE.md` for full spec.
-Short version: Whisper on voiceover WAV → word-level SRT + ASS burn-in file.
-
-### Stage 5 — `stages/stage_5_assembly.py` (TODO)
-See `stages/CLAUDE.md` for full spec.
-Short version: FFmpeg timeline — B-roll + voiceover + music + burned captions + disclaimer card.
-Quality gate before marking complete.
+1. **Stage 6** — YouTube upload
+2. **Stage 4d** — Whisper captions (optional — Stage 5 works without it)
 
 ### Stage 6 — `stages/stage_6_upload.py` (TODO)
 See `stages/CLAUDE.md` for full spec.
