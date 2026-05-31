@@ -172,3 +172,34 @@ export interface StageStreamEvent {
   data: string
   exitCode?: number
 }
+
+// ─── Clip library ─────────────────────────────────────────────────────────────
+
+export type ClipStatus = 'active' | 'missing' | 'deleted'
+
+export interface Clip {
+  id: string
+  filename: string
+  filepath: string
+  source_url: string
+  search_tags: string[]
+  content_tags: string[]
+  resolution: string | null
+  duration_sec: number | null
+  license_type: string
+  times_used: number
+  last_used_at: string | null
+  last_used_project: string | null
+  status: ClipStatus
+  created_at: string
+}
+
+export interface ClipStats {
+  total: number
+  active: number
+  missing: number
+  deleted: number
+  total_uses: number
+  unique_projects: number
+  total_duration_sec: number
+}

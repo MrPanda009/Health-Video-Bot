@@ -12,12 +12,12 @@ export default function JobsPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <div className="mx-auto max-w-5xl px-4 py-10">
+      <div className="mx-auto max-w-7xl px-4 py-10">
         {/* Header */}
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-              Health Video Bot
+              Jobs
             </h1>
             <p className="mt-1 text-sm text-zinc-500">
               Hindi health education video pipeline

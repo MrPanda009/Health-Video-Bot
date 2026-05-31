@@ -21,6 +21,7 @@ Writes to:   jobs/{job_id}.json  (assets.broll_video_paths, assets.broll_missing
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -31,6 +32,13 @@ import requests
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Resolve project root (one level up from this file) so broll_db can be imported
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from broll_db import ClipDB  # noqa: E402
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +58,33 @@ CLIPS_PER_SEGMENT = 2   # target clips per segment — Stage 5 picks the better 
 def _slug(text: str) -> str:
     """Convert a search term to a filesystem-safe cache key (max 80 chars)."""
     return text.lower().replace(" ", "_").replace("/", "_").replace("\\", "_")[:80]
+
+
+def _probe_clip(path: Path) -> tuple[Optional[str], Optional[float]]:
+    """
+    Use ffprobe to get (resolution, duration_sec) of a video file.
+    Returns (None, None) if ffprobe is unavailable or the file can't be probed.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-print_format", "json",
+             "-show_streams", "-show_format", str(path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return None, None
+        data    = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        v       = next((s for s in streams if s.get("codec_type") == "video"), None)
+        if v:
+            w, h = v.get("width"), v.get("height")
+            resolution = f"{w}x{h}" if w and h else None
+        else:
+            resolution = None
+        duration = float(data.get("format", {}).get("duration", 0)) or None
+        return resolution, duration
+    except Exception:
+        return None, None
 
 
 def load_niche_profile() -> dict:
@@ -260,6 +295,8 @@ def run(job_id: str) -> dict:
     broll_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    db = ClipDB()
+
     broll_video_paths: list[dict] = []
     missing_segments:  list[str]  = []
 
@@ -277,12 +314,41 @@ def run(job_id: str) -> dict:
             slug   = _slug(search_term)
             cached = cache_dir / f"{slug}.mp4"
 
-            # ── Cache hit — skip API entirely ────────────────────────────
+            # ── DB tag search — reuse an already-downloaded clip ──────────
+            db_hits = db.find_by_tags([search_term])
+            if db_hits:
+                hit      = db_hits[0]
+                hit_path = Path(hit["filepath"])
+                if hit_path.exists():
+                    dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
+                    shutil.copy2(hit_path, dest)
+                    db.mark_used(hit["id"], job_id)
+                    collected.append(str(dest))
+                    print(f"[Stage 4a]   ✓ db     '{search_term}' → {dest.name} "
+                          f"(used {hit['times_used'] + 1}×)")
+                    continue
+                else:
+                    # File gone — mark it missing so the UI reflects reality
+                    db.mark_missing(hit["id"])
+
+            # ── Filesystem cache hit (clip not yet in DB) ─────────────────
             if cached.exists():
                 dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
                 shutil.copy2(cached, dest)
                 collected.append(str(dest))
                 print(f"[Stage 4a]   ✓ cache  '{search_term}' → {dest.name}")
+                # Register it in the DB for future reuse
+                resolution, duration_probed = _probe_clip(dest)
+                db.add_clip(
+                    filename=dest.name,
+                    filepath=str(dest.resolve()),
+                    source_url=f"cache:{slug}",
+                    search_tags=[search_term],
+                    content_tags=[],
+                    resolution=resolution,
+                    duration_sec=duration_probed,
+                    license_type="cache",
+                )
                 continue
 
             # ── Pexels ───────────────────────────────────────────────────
@@ -298,15 +364,34 @@ def run(job_id: str) -> dict:
 
             # ── Download up to what we still need ────────────────────────
             first_download_for_term = True
-            for url, duration in clips:
+            for url, api_duration in clips:
                 if len(collected) >= CLIPS_PER_SEGMENT:
                     break
+
+                # Skip URLs already in the DB (another term may have found the same video)
+                if db.is_duplicate(url):
+                    print(f"[Stage 4a]   ⟳ skip  duplicate URL: {url[:60]}…")
+                    continue
+
                 dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
-                if download_clip(url, dest, duration):
-                    # Cache only the first successfully downloaded clip per term
+                if download_clip(url, dest, api_duration):
+                    # Cache the first successful download for this term
                     if first_download_for_term and not cached.exists():
                         shutil.copy2(dest, cached)
                         first_download_for_term = False
+
+                    resolution, duration_probed = _probe_clip(dest)
+                    license_type = "pexels_free" if "pexels.com" in url else "pixabay"
+                    db.add_clip(
+                        filename=dest.name,
+                        filepath=str(dest.resolve()),
+                        source_url=url,
+                        search_tags=[search_term],
+                        content_tags=[],
+                        resolution=resolution,
+                        duration_sec=duration_probed or float(api_duration),
+                        license_type=license_type,
+                    )
                     collected.append(str(dest))
                 time.sleep(0.2)
 
