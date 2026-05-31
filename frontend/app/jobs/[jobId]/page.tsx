@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Settings2, ExternalLink } from 'lucide-react'
@@ -17,6 +17,10 @@ export default function JobDetailPage() {
   const [isRunning, setIsRunning] = useState(false)
   const [showOverride, setShowOverride] = useState(false)
   const { job, isLoading, mutate } = useJob(jobId, isRunning)
+  const handleJobUpdated = useCallback(() => {
+    mutate()
+    setIsRunning(false)
+  }, [mutate])
 
   if (isLoading) {
     return (
@@ -100,10 +104,7 @@ export default function JobDetailPage() {
           <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
             <PipelineTimeline
               job={job}
-              onJobUpdated={() => {
-                mutate()
-                setIsRunning(false)
-              }}
+              onJobUpdated={handleJobUpdated}
             />
           </div>
         </section>

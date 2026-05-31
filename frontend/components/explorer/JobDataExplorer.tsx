@@ -1,21 +1,68 @@
+'use client'
+
 import { CollapsibleSection } from './CollapsibleSection'
 import { ContentPreview } from './ContentPreview'
 import type { Job } from '@/lib/types'
 
+function assetUrl(filePath: string): string {
+  return '/api/assets/' + filePath.replace(/^.*assets\//, '')
+}
+
 export function JobDataExplorer({ job }: { job: Job }) {
   return (
     <div className="space-y-2">
+      {/* Study */}
       <CollapsibleSection
         title="Study"
         data={job.study}
         defaultOpen={!!job.study}
         empty={!job.study}
-      />
+      >
+        {job.study && (
+          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {/* Screenshots */}
+            {job.study.screenshot_paths?.length > 0 && (
+              <div className="p-4">
+                <p className="mb-2 text-xs font-medium text-zinc-500">
+                  Screenshots ({job.study.screenshot_paths.length})
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  {job.study.screenshot_paths.map((p, i) => (
+                    <a
+                      key={p}
+                      href={assetUrl(p)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={assetUrl(p)}
+                        alt={`Screenshot ${i + 1}`}
+                        className="h-40 w-auto rounded border border-zinc-200 object-contain hover:opacity-80 dark:border-zinc-700"
+                      />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Raw JSON */}
+            <pre className="max-h-80 overflow-auto p-4 font-mono text-xs leading-5 text-zinc-700 dark:text-zinc-300">
+              {JSON.stringify(job.study, null, 2)}
+            </pre>
+          </div>
+        )}
+      </CollapsibleSection>
+
+      {/* Claims */}
       <CollapsibleSection
         title="Claims"
         data={job.claims}
         empty={!job.claims}
       />
+
+      {/* Content */}
       <CollapsibleSection
         title="Content"
         data={job.content}
@@ -24,56 +71,115 @@ export function JobDataExplorer({ job }: { job: Job }) {
       >
         {job.content && (
           <div className="p-4">
-            <ContentPreview content={job.content} assets={job.assets} />
+            <ContentPreview content={job.content} />
           </div>
         )}
       </CollapsibleSection>
+
+      {/* Assets */}
       <CollapsibleSection
         title="Assets"
         data={job.assets}
+        defaultOpen={!!job.assets?.voiceover_path || !!job.assets?.broll_video_paths?.length}
         empty={!job.assets}
       >
         {job.assets && (
-          <div className="p-4 space-y-3">
+          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {/* Voiceover */}
             {job.assets.voiceover_path && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">Voiceover</span>
-                <p className="font-mono text-xs text-zinc-700 dark:text-zinc-300 mt-0.5">
-                  {job.assets.voiceover_path}
+              <div className="p-4">
+                <div className="mb-1.5 flex items-center gap-2">
+                  <p className="text-xs font-medium text-zinc-500">Voiceover</p>
                   {job.assets.voiceover_duration_seconds != null && (
-                    <span className="ml-2 text-zinc-400">
-                      ({job.assets.voiceover_duration_seconds.toFixed(1)}s)
+                    <span className="text-xs text-zinc-400">
+                      {job.assets.voiceover_duration_seconds.toFixed(1)}s
                     </span>
                   )}
-                </p>
+                </div>
+                <audio
+                  controls
+                  src={assetUrl(job.assets.voiceover_path)}
+                  className="w-full rounded"
+                />
               </div>
             )}
+
+            {/* Thumbnails */}
+            {job.assets.thumbnail_paths?.length > 0 && (
+              <div className="p-4">
+                <p className="mb-2 text-xs font-medium text-zinc-500">
+                  Thumbnails ({job.assets.thumbnail_paths.length})
+                </p>
+                <div className="grid grid-cols-3 gap-3">
+                  {job.assets.thumbnail_paths.map((t) => (
+                    <a
+                      key={t.variant_id}
+                      href={assetUrl(t.path)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="space-y-1"
+                    >
+                      <p className="text-center text-xs text-zinc-500">{t.variant_id}</p>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={assetUrl(t.path)}
+                        alt={t.variant_id}
+                        className="w-full rounded border border-zinc-200 hover:opacity-80 dark:border-zinc-700"
+                      />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* B-roll */}
             {job.assets.broll_video_paths?.length > 0 && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">
+              <div className="p-4">
+                <p className="mb-2 text-xs font-medium text-zinc-500">
                   B-roll ({job.assets.broll_video_paths.length} segments)
-                </span>
-                <div className="mt-1 space-y-1">
+                </p>
+                <div className="space-y-4">
                   {job.assets.broll_video_paths.map((b) => (
-                    <div key={b.segment_name} className="text-xs text-zinc-600 dark:text-zinc-400">
-                      <span className="font-medium">{b.segment_name}:</span>{' '}
-                      {b.paths.length} clip(s)
+                    <div key={b.segment_name}>
+                      <p className="mb-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                        {b.segment_name}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {b.paths.map((p) => (
+                          <video
+                            key={p}
+                            src={assetUrl(p)}
+                            controls
+                            muted
+                            className="w-full rounded border border-zinc-200 dark:border-zinc-700"
+                          />
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
+
+            {/* Captions */}
             {job.assets.srt_path && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">Captions</span>
-                <p className="font-mono text-xs text-zinc-700 dark:text-zinc-300 mt-0.5">
+              <div className="p-4">
+                <p className="mb-1 text-xs font-medium text-zinc-500">Captions (SRT)</p>
+                <a
+                  href={assetUrl(job.assets.srt_path)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+                >
                   {job.assets.srt_path}
-                </p>
+                </a>
               </div>
             )}
           </div>
         )}
       </CollapsibleSection>
+
+      {/* Output */}
       <CollapsibleSection
         title="Output"
         data={job.output}
@@ -81,19 +187,25 @@ export function JobDataExplorer({ job }: { job: Job }) {
         empty={!job.output}
       >
         {job.output && (
-          <div className="p-4 space-y-3">
+          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            {/* Final video */}
             {job.output.final_video_path && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">Final Video</span>
-                <p className="font-mono text-xs text-zinc-700 dark:text-zinc-300 mt-0.5">
-                  {job.output.final_video_path}
-                </p>
+              <div className="p-4">
+                <p className="mb-2 text-xs font-medium text-zinc-500">Final Video</p>
+                <video
+                  src={assetUrl(job.output.final_video_path)}
+                  controls
+                  className="mx-auto max-h-[480px] w-auto rounded border border-zinc-200 dark:border-zinc-700"
+                  style={{ maxWidth: '100%' }}
+                />
               </div>
             )}
+
+            {/* Quality gate */}
             {job.output.quality_checks && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">Quality Gate</span>
-                <div className="mt-1 space-y-0.5">
+              <div className="p-4">
+                <p className="mb-1 text-xs font-medium text-zinc-500">Quality Gate</p>
+                <div className="space-y-0.5">
                   {Object.entries(job.output.quality_checks).map(([k, v]) => (
                     <div key={k} className="flex items-center gap-2 text-xs">
                       <span
@@ -113,14 +225,16 @@ export function JobDataExplorer({ job }: { job: Job }) {
                 </div>
               </div>
             )}
+
+            {/* YouTube URL */}
             {job.output.youtube_url && (
-              <div>
-                <span className="text-xs font-medium text-zinc-500">YouTube URL</span>
+              <div className="p-4">
+                <p className="mb-0.5 text-xs font-medium text-zinc-500">YouTube URL</p>
                 <a
                   href={job.output.youtube_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-0.5 block text-sm text-blue-600 hover:underline dark:text-blue-400"
+                  className="text-sm text-blue-600 hover:underline dark:text-blue-400"
                 >
                   {job.output.youtube_url}
                 </a>

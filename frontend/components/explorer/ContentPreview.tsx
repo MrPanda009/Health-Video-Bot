@@ -1,14 +1,13 @@
 'use client'
 
 import { CopyButton } from '@/components/terminal/CopyButton'
-import type { Content, Assets } from '@/lib/types'
+import type { Content } from '@/lib/types'
 
 interface ContentPreviewProps {
   content: Content
-  assets: Assets | null
 }
 
-export function ContentPreview({ content, assets }: ContentPreviewProps) {
+export function ContentPreview({ content }: ContentPreviewProps) {
   return (
     <div className="space-y-6">
       {/* Hindi Script */}
@@ -104,30 +103,6 @@ export function ContentPreview({ content, assets }: ContentPreviewProps) {
         </div>
       </div>
 
-      {/* Thumbnails */}
-      {assets?.thumbnail_paths && assets.thumbnail_paths.length > 0 && (
-        <div>
-          <h4 className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Thumbnails
-          </h4>
-          <div className="grid grid-cols-3 gap-3">
-            {assets.thumbnail_paths.map((t) => {
-              const assetRelPath = t.path.replace(/^assets\//, '')
-              return (
-                <div key={t.variant_id} className="space-y-1">
-                  <p className="text-center text-xs text-zinc-500">{t.variant_id}</p>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`/api/assets/${assetRelPath}`}
-                    alt={t.variant_id}
-                    className="w-full rounded border border-zinc-200 dark:border-zinc-800"
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
     </div>
   )
 }

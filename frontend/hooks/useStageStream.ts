@@ -8,7 +8,8 @@ export interface StreamParams {
   pmid?: string
 }
 
-export function useStageStream(jobId: string, stage: StageKey | null) {
+export function useStageStream(jobId: string) {
+  const [activeStage, setActiveStage] = useState<StageKey | null>(null)
   const [lines, setLines] = useState<string[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [exitCode, setExitCode] = useState<number | null>(null)
@@ -20,9 +21,17 @@ export function useStageStream(jobId: string, stage: StageKey | null) {
     setIsRunning(false)
   }, [])
 
+  const clear = useCallback(() => {
+    esRef.current?.close()
+    esRef.current = null
+    setActiveStage(null)
+    setLines([])
+    setIsRunning(false)
+    setExitCode(null)
+  }, [])
+
   const start = useCallback(
-    (params?: StreamParams) => {
-      if (!stage) return
+    (stage: StageKey, params?: StreamParams) => {
       esRef.current?.close()
 
       const qs = new URLSearchParams()
@@ -32,6 +41,8 @@ export function useStageStream(jobId: string, stage: StageKey | null) {
       const url = `/api/jobs/${jobId}/stage/${stage}/stream?${qs.toString()}`
       const es = new EventSource(url)
       esRef.current = es
+
+      setActiveStage(stage)
       setLines([])
       setIsRunning(true)
       setExitCode(null)
@@ -59,7 +70,7 @@ export function useStageStream(jobId: string, stage: StageKey | null) {
         esRef.current = null
       }
     },
-    [jobId, stage],
+    [jobId],
   )
 
   useEffect(() => {
@@ -68,5 +79,5 @@ export function useStageStream(jobId: string, stage: StageKey | null) {
     }
   }, [])
 
-  return { lines, isRunning, exitCode, start, stop }
+  return { activeStage, lines, isRunning, exitCode, start, stop, clear }
 }
