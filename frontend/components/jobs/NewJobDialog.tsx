@@ -1,16 +1,35 @@
 'use client'
 
 import { useState } from 'react'
-import { X, Info } from 'lucide-react'
+import { X, Info, Monitor, Smartphone } from 'lucide-react'
 
 interface NewJobDialogProps {
   onClose: () => void
   onCreated: () => void
 }
 
+type AspectRatio = '9:16' | '16:9'
+
+const ASPECT_OPTIONS: { value: AspectRatio; label: string; sub: string; Icon: typeof Monitor }[] =
+  [
+    {
+      value: '9:16',
+      label: 'Shorts (9:16)',
+      sub: '1080 × 1920',
+      Icon: Smartphone,
+    },
+    {
+      value: '16:9',
+      label: 'Landscape (16:9)',
+      sub: '1920 × 1080',
+      Icon: Monitor,
+    },
+  ]
+
 export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
   const [topic, setTopic] = useState('')
   const [pmid, setPmid] = useState('')
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
@@ -25,6 +44,7 @@ export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
         body: JSON.stringify({
           topic: topic.trim() || undefined,
           pmid: pmid.trim() || undefined,
+          aspect_ratio: aspectRatio,
         }),
       })
       if (!res.ok) {
@@ -56,6 +76,35 @@ export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4 p-6">
+          {/* Aspect ratio picker */}
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Output format
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {ASPECT_OPTIONS.map(({ value, label, sub, Icon }) => {
+                const selected = aspectRatio === value
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setAspectRatio(value)}
+                    className={[
+                      'flex flex-col items-center gap-1.5 rounded-lg border px-4 py-3 text-sm transition-colors',
+                      selected
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                        : 'border-zinc-200 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800/50',
+                    ].join(' ')}
+                  >
+                    <Icon size={20} />
+                    <span className="font-medium">{label}</span>
+                    <span className="text-xs opacity-70">{sub}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
           <div>
             <label className="mb-1.5 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
               Topic <span className="font-normal text-zinc-400">(optional)</span>

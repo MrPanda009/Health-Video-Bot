@@ -96,8 +96,10 @@ def save_job(job: dict) -> None:
         json.dump(job, f, ensure_ascii=False, indent=2)
 
 
-def create_job(topic: str) -> dict:
+def create_job(topic: str, aspect_ratio: str = "9:16") -> dict:
     """Create a fresh job object and save it to disk."""
+    if aspect_ratio not in ("9:16", "16:9"):
+        aspect_ratio = "9:16"
     Path(JOBS_DIR).mkdir(exist_ok=True)
     job_id = str(uuid.uuid4())
     job = {
@@ -105,6 +107,7 @@ def create_job(topic: str) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "status": "created",
+        "aspect_ratio": aspect_ratio,
         "error": None,
         "study": None,
         "claims": None,
@@ -973,7 +976,7 @@ def display_candidates(candidates: list[StudyCandidate]) -> None:
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def run(topic: str = None, pmid_override: str = None) -> dict:
+def run(topic: str = None, pmid_override: str = None, aspect_ratio: str = "9:16") -> dict:
     """
     Main Stage 1 runner.
 
@@ -982,6 +985,8 @@ def run(topic: str = None, pmid_override: str = None) -> dict:
                        niche_profile.research.topic_rotation.
         pmid_override: Skip search entirely and use this PMID directly.
                        Useful for manual curation or re-runs.
+        aspect_ratio:  Output video format — "9:16" (1080×1920 Shorts) or
+                       "16:9" (1920×1080 landscape). Default: "9:16".
 
     Returns:
         Job dict with study{} populated and status "stage_1_complete",
@@ -993,7 +998,7 @@ def run(topic: str = None, pmid_override: str = None) -> dict:
         topic = profile["research"]["topic_rotation"][0]
         print(f"[Stage 1] No topic provided — using rotation: '{topic}'")
 
-    job    = create_job(topic)
+    job    = create_job(topic, aspect_ratio=aspect_ratio)
     job_id = job["job_id"]
 
     try:
@@ -1077,13 +1082,18 @@ if __name__ == "__main__":
     #
     #   python stage_1_research.py "" 38234567
     #       Skips search, uses PMID 38234567 directly
+    #
+    #   python stage_1_research.py "diabetes" "" 16:9
+    #       Searches topic, auto-selects, outputs 1920×1080 landscape video
 
-    topic_arg = sys.argv[1] if len(sys.argv) > 1 else None
-    pmid_arg  = sys.argv[2] if len(sys.argv) > 2 else None
+    topic_arg        = sys.argv[1] if len(sys.argv) > 1 else None
+    pmid_arg         = sys.argv[2] if len(sys.argv) > 2 else None
+    aspect_ratio_arg = sys.argv[3] if len(sys.argv) > 3 else "9:16"
 
     result = run(
         topic=topic_arg if topic_arg else None,
-        pmid_override=pmid_arg
+        pmid_override=pmid_arg if pmid_arg else None,
+        aspect_ratio=aspect_ratio_arg,
     )
 
     print(f"\nFinal status : {result['status']}")

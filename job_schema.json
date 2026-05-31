@@ -7,6 +7,7 @@
     "created_at": "ISO 8601 datetime",
     "updated_at": "ISO 8601 datetime",
     "status": "one of: created | stage_1_complete | stage_2_complete | stage_3_complete | stage_4_complete | stage_5_complete | complete | error",
+    "aspect_ratio": "one of: 9:16 | 16:9 — output video format. 9:16 = 1080×1920 (YouTube Shorts), 16:9 = 1920×1080 (standard landscape). Default: 9:16",
     "error": {
         "stage": "string — which stage failed",
         "message": "string — error message",

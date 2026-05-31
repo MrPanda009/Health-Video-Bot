@@ -50,9 +50,20 @@ NICHE_PROFILE_PATH = os.getenv("NICHE_PROFILE_PATH", "niche_profile.json")
 JOBS_DIR           = os.getenv("JOBS_DIR", "jobs")
 ASSETS_DIR         = os.getenv("ASSETS_DIR", "assets")
 
-VIDEO_W, VIDEO_H    = 1080, 1920   # YouTube Shorts portrait
 FPS                 = 30
 DISCLAIMER_DURATION = 3            # seconds prepended to every video
+
+# Supported output dimensions keyed by aspect_ratio string
+_ASPECT_DIMS: dict[str, tuple[int, int]] = {
+    "9:16": (1080, 1920),   # YouTube Shorts portrait
+    "16:9": (1920, 1080),   # Standard landscape / YouTube long-form
+}
+
+
+def _video_dims(job: dict) -> tuple[int, int]:
+    """Return (width, height) for this job based on its aspect_ratio field."""
+    ar = job.get("aspect_ratio", "9:16")
+    return _ASPECT_DIMS.get(ar, _ASPECT_DIMS["9:16"])
 
 # Font search order for disclaimer card (Latin/English text)
 _FONT_CANDIDATES = [
@@ -156,41 +167,36 @@ def _find_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def generate_disclaimer_png(profile: dict, output_path: Path) -> None:
-    """
-    Generate a 1080×1920 black PNG with the English medical disclaimer centered in white text.
-    Uses English text (ASCII-safe) to avoid font/Devanagari rendering issues.
-    """
+def generate_disclaimer_png(profile: dict, output_path: Path,
+                            video_w: int, video_h: int) -> None:
+    """Generate a full-HD black PNG with the English medical disclaimer centered in white text."""
     text = profile["compliance"]["medical_disclaimer"]["text_english"]
-    img  = Image.new("RGB", (VIDEO_W, VIDEO_H), color="black")
+    img  = Image.new("RGB", (video_w, video_h), color="black")
     draw = ImageDraw.Draw(img)
 
     font_large = _find_font(52)
     font_small = _find_font(38)
 
-    # Wrap text to fit ~900px wide
     lines = textwrap.wrap(text, width=32)
     line_h = 60
     total_h = len(lines) * line_h
-    y_start = (VIDEO_H - total_h) // 2
+    y_start = (video_h - total_h) // 2
 
-    # Dim background band for readability
     band_top    = y_start - 40
     band_bottom = y_start + total_h + 40
-    draw.rectangle([(60, band_top), (VIDEO_W - 60, band_bottom)], fill=(20, 20, 20))
+    draw.rectangle([(60, band_top), (video_w - 60, band_bottom)], fill=(20, 20, 20))
 
-    # "⚠ Medical Notice" header
     header = "⚠  Medical Notice"
     try:
-        draw.text((VIDEO_W // 2, y_start - 20), header,
+        draw.text((video_w // 2, y_start - 20), header,
                   font=font_small, fill=(255, 200, 0), anchor="mm")
     except Exception:
-        draw.text((VIDEO_W // 2 - 150, y_start - 20), header, font=font_small, fill=(255, 200, 0))
+        draw.text((video_w // 2 - 150, y_start - 20), header, font=font_small, fill=(255, 200, 0))
 
     for i, line in enumerate(lines):
         y = y_start + i * line_h
         try:
-            draw.text((VIDEO_W // 2, y), line, font=font_large, fill="white", anchor="lm")
+            draw.text((video_w // 2, y), line, font=font_large, fill="white", anchor="lm")
         except Exception:
             draw.text((100, y), line, font=font_large, fill="white")
 
@@ -200,17 +206,19 @@ def generate_disclaimer_png(profile: dict, output_path: Path) -> None:
 
 # ─── Assembly ─────────────────────────────────────────────────────────────────
 
-def _portrait_filter(stream_label: str, out_label: str, duration_s: float | None = None) -> str:
+def _scale_filter(stream_label: str, out_label: str, video_w: int, video_h: int,
+                  duration_s: float | None = None) -> str:
     """
-    Build filter_complex fragment: scale to fill 1080×1920 (center-crop landscape),
+    Build filter_complex fragment: scale source to fill video_w×video_h (center-crop),
     normalise fps and SAR. Optionally trim to duration_s (for looped video inputs).
+    Works for both portrait (9:16) and landscape (16:9) targets.
     """
     parts = []
     if duration_s is not None:
         parts.append(f"trim=duration={duration_s:.3f},setpts=PTS-STARTPTS")
     parts += [
-        f"scale=w={VIDEO_W}:h={VIDEO_H}:force_original_aspect_ratio=increase",
-        f"crop={VIDEO_W}:{VIDEO_H}",
+        f"scale=w={video_w}:h={video_h}:force_original_aspect_ratio=increase",
+        f"crop={video_w}:{video_h}",
         f"fps=fps={FPS}",
         "setsar=1",
     ]
@@ -219,17 +227,22 @@ def _portrait_filter(stream_label: str, out_label: str, duration_s: float | None
 
 def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     """
-    Build and run the FFmpeg command that produces the final portrait video.
+    Build and run the FFmpeg command that produces the final video.
+    Dimensions are derived from job["aspect_ratio"]: 9:16 → 1080×1920, 16:9 → 1920×1080.
     Returns the path to the output file.
     """
+    video_w, video_h = _video_dims(job)
     assets   = job.get("assets") or {}
     job_id   = job["job_id"]
     tmp_dir  = out_dir  # put intermediates alongside output
 
+    ar_label = job.get("aspect_ratio", "9:16")
+    print(f"[Stage 5] Aspect ratio: {ar_label} → {video_w}×{video_h}")
+
     # ── Disclaimer PNG ───────────────────────────────────────────────────────
     disclaimer_png = tmp_dir / "disclaimer.png"
     print("[Stage 5] Generating disclaimer card...")
-    generate_disclaimer_png(profile, disclaimer_png)
+    generate_disclaimer_png(profile, disclaimer_png, video_w, video_h)
 
     # ── Asset paths ──────────────────────────────────────────────────────────
     voiceover_path = assets.get("voiceover_path")
@@ -265,7 +278,7 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     cmd += ["-loop", "1", "-r", str(FPS), "-t", str(DISCLAIMER_DURATION),
             "-i", str(disclaimer_png)]
     filter_parts.append(
-        f"[{input_idx}:v]scale={VIDEO_W}:{VIDEO_H},fps=fps={FPS},setsar=1[disc]"
+        f"[{input_idx}:v]scale={video_w}:{video_h},fps=fps={FPS},setsar=1[disc]"
     )
     clip_labels.append("disc")
     input_idx += 1
@@ -274,9 +287,7 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     intro_path = Path(ASSETS_DIR) / "intro.mp4"
     if intro_path.exists():
         cmd += ["-i", str(intro_path)]
-        filter_parts.append(_portrait_filter(str(input_idx), "intro"))
-        # prepend intro before disclaimer by reordering later
-        # (for simplicity, put it first in clip_labels)
+        filter_parts.append(_scale_filter(str(input_idx), "intro", video_w, video_h))
         clip_labels.insert(0, "intro")
         input_idx += 1
         print("[Stage 5]   Found intro.mp4 — prepending")
@@ -295,22 +306,22 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         )
 
         if use_screenshot:
-            # Pick the first screenshot; use a PNG loop for duration seconds
             ss_path = screenshot_paths[0]
             cmd += ["-loop", "1", "-r", str(FPS), "-t", f"{duration:.3f}",
                     "-i", str(ss_path)]
-            filter_parts.append(_portrait_filter(str(input_idx), label))
+            filter_parts.append(_scale_filter(str(input_idx), label, video_w, video_h))
             print(f"[Stage 5]   {name}: screenshot ({duration}s)")
         else:
             clip_paths = broll_map.get(name, [])
             if clip_paths and Path(clip_paths[0]).exists():
                 cmd += ["-stream_loop", "-1", "-i", clip_paths[0]]
-                filter_parts.append(_portrait_filter(str(input_idx), label, duration_s=duration))
+                filter_parts.append(_scale_filter(str(input_idx), label, video_w, video_h,
+                                                  duration_s=duration))
                 print(f"[Stage 5]   {name}: b-roll ({duration}s)")
             else:
                 # Fallback: black frame
                 cmd += ["-f", "lavfi", "-r", str(FPS),
-                        "-i", f"color=c=black:s={VIDEO_W}x{VIDEO_H}:r={FPS}:d={duration:.3f}"]
+                        "-i", f"color=c=black:s={video_w}x{video_h}:r={FPS}:d={duration:.3f}"]
                 filter_parts.append(f"[{input_idx}:v]fps=fps={FPS},setsar=1[{label}]")
                 print(f"[Stage 5]   {name}: ⚠ no clip — using black frame ({duration}s)")
 
@@ -321,7 +332,7 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     outro_path = Path(ASSETS_DIR) / "outro.mp4"
     if outro_path.exists():
         cmd += ["-i", str(outro_path)]
-        filter_parts.append(_portrait_filter(str(input_idx), "outro"))
+        filter_parts.append(_scale_filter(str(input_idx), "outro", video_w, video_h))
         clip_labels.append("outro")
         input_idx += 1
         print("[Stage 5]   Found outro.mp4 — appending")

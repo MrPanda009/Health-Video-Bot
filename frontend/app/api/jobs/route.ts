@@ -42,7 +42,15 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}))
-  const { topic, pmid } = body as { topic?: string; pmid?: string }
+  const { topic, pmid, aspect_ratio } = body as {
+    topic?: string
+    pmid?: string
+    aspect_ratio?: string
+  }
+
+  const validAspectRatios = ['9:16', '16:9']
+  const resolvedAspectRatio =
+    aspect_ratio && validAspectRatios.includes(aspect_ratio) ? aspect_ratio : '9:16'
 
   const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3'
   const pythonBin = PYTHON_BIN.startsWith('.')
@@ -50,8 +58,9 @@ export async function POST(request: Request) {
     : PYTHON_BIN
 
   const args = [path.join(PIPELINE_ROOT, 'stages/stage_1_research.py')]
-  if (topic) args.push(topic)
-  if (pmid) args.push(pmid)
+  args.push(topic ?? '')
+  args.push(pmid ?? '')
+  args.push(resolvedAspectRatio)
 
   const { spawn } = await import('child_process')
   const proc = spawn(pythonBin, args, {
