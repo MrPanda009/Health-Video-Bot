@@ -15,7 +15,7 @@ export function JobDataExplorer({ job }: { job: Job }) {
       <CollapsibleSection
         title="Study"
         data={job.study}
-        defaultOpen={!!job.study}
+        defaultOpen={false}
         empty={!job.study}
       >
         {job.study && (
@@ -66,7 +66,7 @@ export function JobDataExplorer({ job }: { job: Job }) {
       <CollapsibleSection
         title="Content"
         data={job.content}
-        defaultOpen={!!job.content}
+        defaultOpen={false}
         empty={!job.content}
       >
         {job.content && (
@@ -80,7 +80,7 @@ export function JobDataExplorer({ job }: { job: Job }) {
       <CollapsibleSection
         title="Assets"
         data={job.assets}
-        defaultOpen={!!job.assets?.voiceover_path || !!job.assets?.broll_video_paths?.length}
+        defaultOpen={false}
         empty={!job.assets}
       >
         {job.assets && (
@@ -183,7 +183,7 @@ export function JobDataExplorer({ job }: { job: Job }) {
       <CollapsibleSection
         title="Output"
         data={job.output}
-        defaultOpen={!!job.output?.final_video_path}
+        defaultOpen={false}
         empty={!job.output}
       >
         {job.output && (
