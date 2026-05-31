@@ -499,8 +499,10 @@ def run(job_id: str) -> dict:
     job     = load_job(job_id)
 
     # ── Pre-flight checks ────────────────────────────────────────────────────
-    if job["status"] != "stage_2_complete":
+    errored_here = job["status"] == "error" and job.get("error", {}).get("stage") == "stage_3"
+    if job["status"] != "stage_2_complete" and not errored_here:
         return mark_error(job, f"Job status is '{job['status']}' — expected 'stage_2_complete'")
+    job.pop("error", None)  # clear previous error so a clean run doesn't leave stale error block
 
     study  = job.get("study")
     claims = job.get("claims")
@@ -599,18 +601,21 @@ if __name__ == "__main__":
             try:
                 with open(jf) as f:
                     j = json.load(f)
-                if j.get("status") == "stage_2_complete":
-                    candidates.append((jf.stat().st_mtime, j["job_id"]))
+                ready = j.get("status") == "stage_2_complete"
+                retryable = j.get("status") == "error" and j.get("error", {}).get("stage") == "stage_3"
+                if ready or retryable:
+                    candidates.append((jf.stat().st_mtime, j["job_id"], j.get("status")))
             except Exception:
                 continue
 
         if not candidates:
-            print("No stage_2_complete jobs found. Run stage_2_claim_extraction.py first.")
+            print("No stage_2_complete or stage_3 error jobs found. Run stage_2_claim_extraction.py first.")
             sys.exit(1)
 
         candidates.sort(reverse=True)
-        job_id = candidates[0][1]
-        print(f"[Stage 3] No job_id provided — using most recent: {job_id}")
+        _, job_id, picked_status = candidates[0]
+        label = "retrying errored" if picked_status == "error" else "most recent"
+        print(f"[Stage 3] No job_id provided — using {label}: {job_id}")
     else:
         job_id = sys.argv[1]
 
