@@ -203,12 +203,17 @@ def fetch_study_summaries(pmids: list[str]) -> list[dict]:
 
             pmid = str(medline["PMID"])
 
+            # ArticleIdList contains doi, pmc, pubmed ids — extract all in one pass
             id_list = article.get("PubmedData", {}).get("ArticleIdList", [])
-            has_pmc = any(
-                str(aid).startswith("PMC") or
-                getattr(aid, "attributes", {}).get("IdType") == "pmc"
-                for aid in id_list
-            )
+            has_pmc = False
+            doi_from_pubmed = None
+            for aid in id_list:
+                id_type = getattr(aid, "attributes", {}).get("IdType", "")
+                id_val  = str(aid)
+                if id_type == "pmc" or id_val.startswith("PMC"):
+                    has_pmc = True
+                if id_type == "doi":
+                    doi_from_pubmed = id_val
 
             summaries.append({
                 "pmid": pmid,
@@ -220,6 +225,8 @@ def fetch_study_summaries(pmids: list[str]) -> list[dict]:
                 "abstract_preview": abstract[:300],
                 "abstract_full": abstract,
                 "has_free_fulltext": has_pmc,
+                "doi": doi_from_pubmed,          # From PubMed XML ArticleIdList
+                "doi_from_pubmed": doi_from_pubmed,  # Explicit key for build_full_study
             })
         except Exception as e:
             print(f"[Stage 1] Warning: Could not parse article — {e}")
@@ -234,7 +241,10 @@ def enrich_with_citation_counts(summaries: list[dict]) -> list[dict]:
     """
     Fetch citation counts from Semantic Scholar (free, no key needed).
     Rate limit: 1 req/sec. Fails gracefully.
-    Also captures DOI if available.
+
+    DOI priority: PubMed XML (already in summary as doi_from_pubmed) is the
+    ground truth. Semantic Scholar DOI is only used if PubMed didn't have one.
+    Never overwrite a known DOI with None.
     """
     print("[Stage 1] Fetching citation counts from Semantic Scholar...")
     for s in summaries:
@@ -248,14 +258,17 @@ def enrich_with_citation_counts(summaries: list[dict]) -> list[dict]:
             if resp.status_code == 200:
                 data = resp.json()
                 s["citation_count"] = data.get("citationCount", 0)
-                s["doi"] = data.get("externalIds", {}).get("DOI")
+                # Only use S2 DOI if PubMed XML didn't already provide one
+                ss_doi = data.get("externalIds", {}).get("DOI")
+                if not s.get("doi") and ss_doi:
+                    s["doi"] = ss_doi
             else:
                 s["citation_count"] = 0
-                s["doi"] = None
+                # DOI from PubMed XML (doi_from_pubmed) is already in s["doi"] — don't touch it
             time.sleep(1.1)
         except Exception:
             s["citation_count"] = 0
-            s["doi"] = None
+            # Same — leave s["doi"] untouched on failure
 
     return summaries
 
@@ -327,11 +340,19 @@ def build_full_study(pmid: str, summaries: list[dict], topic: str, query: str) -
     if not s:
         raise ValueError(f"PMID {pmid} not found in fetched summaries")
 
+    # doi_from_pubmed (extracted from PubMed XML ArticleIdList) takes priority.
+    # s["doi"] may have been set by Semantic Scholar — use as fallback only.
+    doi = s.get("doi_from_pubmed") or s.get("doi")
+    if doi:
+        print(f"[Stage 1] DOI resolved: {doi}")
+    else:
+        print(f"[Stage 1] No DOI found for PMID {pmid} — Unpaywall fallback won't be available")
+
     return StudyFull(
         topic=topic,
         pubmed_query=query,
         pmid=s["pmid"],
-        doi=s.get("doi"),
+        doi=doi,
         title=s["title"],
         authors=s["authors"],
         journal=s["journal"],
@@ -343,24 +364,76 @@ def build_full_study(pmid: str, summaries: list[dict], topic: str, query: str) -
 
 
 # ─── Part 6: PDF download ─────────────────────────────────────────────────────
+#
+# Three-strategy waterfall:
+#
+#  Strategy A — NCBI OA FTP service
+#    Best for papers already ingested into PMC's open-access subset.
+#    Works reliably for anything published > ~4 weeks ago.
+#    Fails for brand-new papers (PMC ID exists but OA index not yet updated).
+#
+#  Strategy B — Unpaywall API
+#    Free academic open-access resolver. No key required (just an email).
+#    Finds legal open-access PDFs by DOI — covers publisher OA, preprints,
+#    institutional repositories. Catches most cases Strategy A misses.
+#    Docs: https://unpaywall.org/products/api
+#
+#  Strategy C — Graceful skip
+#    PDF is genuinely unavailable right now (very new paper, paywalled,
+#    publisher hasn't deposited). Log it clearly and move on — the pipeline
+#    can run fine on abstract text + screenshots alone.
 
-def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
-    """
-    Download PDF using the NCBI Open Access FTP service.
-    This is the correct, API-sanctioned method — the direct PMC PDF URL
-    blocks automated access with a 403. The OA service returns a proper
-    FTP path for every open-access paper.
+import xml.etree.ElementTree as ET
+import tarfile
 
-    API docs: https://www.ncbi.nlm.nih.gov/pmc/tools/oa-service/
-    Returns local path on success, None on failure.
-    Assets saved to: assets/{job_id}/pdf/
+
+def _save_pdf_from_response(resp: requests.Response, pdf_path: str, pmid: str, source: str) -> Optional[str]:
     """
-    if not study.full_text_available:
-        print(f"[Stage 1] No free full text for PMID {study.pmid} — skipping PDF")
+    Write a PDF response to disk, handling both direct PDF and tgz bundle.
+    Returns the saved path on success, None on failure.
+    """
+    content_type  = resp.headers.get("content-type", "")
+    download_url  = resp.url
+
+    if "pdf" in content_type or download_url.endswith(".pdf"):
+        with open(pdf_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print(f"[Stage 1] PDF saved via {source}: {pdf_path}")
+        return pdf_path
+
+    elif "tgz" in content_type or "tar" in content_type or download_url.endswith(".tar.gz"):
+        tgz_path = pdf_path.replace(".pdf", ".tar.gz")
+        with open(tgz_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=8192):
+                f.write(chunk)
+        with tarfile.open(tgz_path, "r:gz") as tar:
+            pdf_members = [m for m in tar.getmembers() if m.name.endswith(".pdf")]
+            if pdf_members:
+                extracted = tar.extractfile(pdf_members[0])
+                if extracted:
+                    with open(pdf_path, "wb") as f:
+                        f.write(extracted.read())
+                    os.remove(tgz_path)
+                    print(f"[Stage 1] PDF extracted from tgz via {source}: {pdf_path}")
+                    return pdf_path
+        os.remove(tgz_path)
+        print(f"[Stage 1] No PDF inside tgz ({source})")
         return None
 
+    else:
+        print(f"[Stage 1] Unexpected content-type from {source}: {content_type}")
+        return None
+
+
+def _strategy_a_ncbi_oa(study: StudyFull, pdf_path: str) -> Optional[str]:
+    """
+    Strategy A: NCBI Open Access FTP service.
+    Reliable for papers ingested into PMC OA subset, but lags ~2-4 weeks
+    behind publication for brand-new papers.
+    """
     try:
-        # Step 1: Get PMC ID from Entrez elink
+        # Get PMC ID via Entrez elink
         handle  = Entrez.elink(dbfrom="pubmed", db="pmc", id=study.pmid)
         record  = Entrez.read(handle)
         handle.close()
@@ -372,210 +445,490 @@ def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
                     pmc_ids = [l["Id"] for l in link.get("Link", [])]
 
         if not pmc_ids:
-            print(f"[Stage 1] PMC ID not found for PMID {study.pmid} — skipping PDF")
+            print(f"[Stage 1] Strategy A: no PMC ID found for PMID {study.pmid}")
             return None
 
         pmc_id = f"PMC{pmc_ids[0]}"
-        print(f"[Stage 1] Found {pmc_id}, querying OA service...")
+        print(f"[Stage 1] Strategy A: found {pmc_id}, querying OA service...")
 
-        # Step 2: Query NCBI OA service for the actual download URL
-        # This returns an XML with an <link format="pdf"> element pointing to
-        # the real FTP/HTTPS download path
         oa_resp = requests.get(
             "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi",
             params={"id": pmc_id, "format": "pdf"},
             timeout=15,
-            headers={"User-Agent": "HealthVideoBot/1.0 (mailto:" + os.getenv("ENTREZ_EMAIL", "bot@example.com") + ")"}
+            headers={"User-Agent": f"HealthVideoBot/1.0 (mailto:{os.getenv('ENTREZ_EMAIL', 'bot@example.com')})"}
         )
 
         if oa_resp.status_code != 200:
-            print(f"[Stage 1] OA service returned HTTP {oa_resp.status_code}")
+            print(f"[Stage 1] Strategy A: OA service HTTP {oa_resp.status_code}")
             return None
 
-        # Step 3: Parse the XML response to get the download href
-        import xml.etree.ElementTree as ET
-        root = ET.fromstring(oa_resp.text)
-
-        # Check for error element
+        root     = ET.fromstring(oa_resp.text)
         error_el = root.find(".//error")
         if error_el is not None:
-            print(f"[Stage 1] OA service error: {error_el.text} — PDF not available for {pmc_id}")
+            # This is the "does not exist" case — paper too new or not in OA subset
+            print(f"[Stage 1] Strategy A: {error_el.text} (paper not yet in OA index)")
             return None
 
-        # Find the PDF link — format attribute is "pdf"
-        pdf_link = root.find(".//link[@format='pdf']")
-        if pdf_link is None:
-            # Fallback: try tgz (full package) — PDF is inside
-            print(f"[Stage 1] No direct PDF link from OA service for {pmc_id} — trying tgz")
-            tgz_link = root.find(".//link[@format='tgz']")
-            if tgz_link is None:
-                print(f"[Stage 1] No downloadable package found for {pmc_id}")
-                return None
-            download_url = tgz_link.get("href", "")
-        else:
-            download_url = pdf_link.get("href", "")
+        # Try PDF link first, then tgz bundle
+        link_el = root.find(".//link[@format='pdf']") or root.find(".//link[@format='tgz']")
+        if link_el is None:
+            print(f"[Stage 1] Strategy A: no download link in OA response")
+            return None
 
+        download_url = link_el.get("href", "")
         if not download_url:
-            print(f"[Stage 1] OA service returned empty href for {pmc_id}")
             return None
 
-        # FTP URLs need to be converted to HTTPS for requests
-        # NCBI FTP mirrors at ftp.ncbi.nlm.nih.gov also available via HTTPS
         if download_url.startswith("ftp://"):
             download_url = download_url.replace("ftp://", "https://", 1)
 
-        print(f"[Stage 1] Downloading PDF from: {download_url[:70]}...")
-
-        # Step 4: Download the file
-        dl_resp = requests.get(
-            download_url,
-            timeout=60,
-            headers={"User-Agent": "HealthVideoBot/1.0"},
-            stream=True
-        )
+        print(f"[Stage 1] Strategy A: downloading from {download_url[:70]}...")
+        dl_resp = requests.get(download_url, timeout=60,
+                               headers={"User-Agent": "HealthVideoBot/1.0"}, stream=True)
 
         if dl_resp.status_code != 200:
-            print(f"[Stage 1] PDF download failed (HTTP {dl_resp.status_code})")
+            print(f"[Stage 1] Strategy A: download HTTP {dl_resp.status_code}")
             return None
 
-        content_type = dl_resp.headers.get("content-type", "")
-        pdf_dir  = Path(ASSETS_DIR) / job_id / "pdf"
-
-        if "pdf" in content_type or download_url.endswith(".pdf"):
-            pdf_path = str(pdf_dir / f"{study.pmid}.pdf")
-            with open(pdf_path, "wb") as f:
-                for chunk in dl_resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"[Stage 1] PDF saved: {pdf_path}")
-            return pdf_path
-
-        elif "tgz" in content_type or download_url.endswith(".tar.gz"):
-            # Extract PDF from the tgz package
-            import tarfile, io
-            tgz_path = str(pdf_dir / f"{study.pmid}.tar.gz")
-            with open(tgz_path, "wb") as f:
-                for chunk in dl_resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            with tarfile.open(tgz_path, "r:gz") as tar:
-                pdf_members = [m for m in tar.getmembers() if m.name.endswith(".pdf")]
-                if pdf_members:
-                    pdf_member = pdf_members[0]
-                    extracted = tar.extractfile(pdf_member)
-                    if extracted:
-                        pdf_path = str(pdf_dir / f"{study.pmid}.pdf")
-                        with open(pdf_path, "wb") as f:
-                            f.write(extracted.read())
-                        print(f"[Stage 1] PDF extracted from tgz: {pdf_path}")
-                        os.remove(tgz_path)
-                        return pdf_path
-            print(f"[Stage 1] No PDF found inside tgz for {pmc_id}")
-            return None
-
-        else:
-            print(f"[Stage 1] Unexpected content type: {content_type}")
-            return None
+        return _save_pdf_from_response(dl_resp, pdf_path, study.pmid, "NCBI OA")
 
     except Exception as e:
-        print(f"[Stage 1] PDF download error: {e}")
+        print(f"[Stage 1] Strategy A error: {e}")
         return None
 
 
+def _strategy_b_unpaywall(study: StudyFull, pdf_path: str) -> Optional[str]:
+    """
+    Strategy B: Unpaywall API → iterate all OA locations → Playwright download.
+
+    Key insight: Unpaywall returns multiple OA locations for most papers.
+    best_oa_location is often the publisher's own PDF URL (e.g. MDPI, Springer)
+    which is protected by Cloudflare and blocks automated downloads.
+    Repository copies (PMC, EuropePMC, institutional repos) are NOT Cloudflared
+    and download freely.
+
+    So we:
+    1. Get ALL oa_locations from Unpaywall
+    2. Sort them: repository copies first, publisher copies last
+    3. Try each in order via requests first, then Playwright headless, then visible
+    """
+    doi = study.doi
+    if not doi:
+        print(f"[Stage 1] Strategy B: no DOI for PMID {study.pmid} — skipping")
+        return None
+
+    try:
+        email = os.getenv("ENTREZ_EMAIL", "bot@example.com")
+        print(f"[Stage 1] Strategy B: querying Unpaywall for DOI {doi}...")
+
+        resp = requests.get(
+            f"https://api.unpaywall.org/v2/{doi}",
+            params={"email": email},
+            timeout=10,
+            headers={"User-Agent": "HealthVideoBot/1.0"}
+        )
+
+        if resp.status_code == 404:
+            print(f"[Stage 1] Strategy B: DOI not in Unpaywall index")
+            return None
+        if resp.status_code != 200:
+            print(f"[Stage 1] Strategy B: Unpaywall HTTP {resp.status_code}")
+            return None
+
+        data = resp.json()
+        if not data.get("is_oa"):
+            print(f"[Stage 1] Strategy B: paper is not open access per Unpaywall")
+            return None
+
+        # Collect all OA locations that have a direct PDF URL
+        all_locations = data.get("oa_locations", [])
+        pdf_locations = [
+            loc for loc in all_locations
+            if loc.get("url_for_pdf")
+        ]
+
+        if not pdf_locations:
+            print(f"[Stage 1] Strategy B: no direct PDF URLs in any Unpaywall location")
+            return None
+
+        # Sort: repository copies first (not Cloudflared), publisher copies last
+        # host_type values: 'repository' (PMC, arXiv, institutional) vs 'publisher'
+        pdf_locations.sort(key=lambda loc: 0 if loc.get("host_type") == "repository" else 1)
+
+        print(f"[Stage 1] Strategy B: {len(pdf_locations)} PDF locations found")
+        for i, loc in enumerate(pdf_locations):
+            print(f"  [{i+1}] {loc.get('host_type','?'):12} {loc.get('url_for_pdf','')[:65]}")
+
+        # Try each location
+        for loc in pdf_locations:
+            pdf_url    = loc["url_for_pdf"]
+            host_type  = loc.get("host_type", "unknown")
+            result     = _try_download_url(pdf_url, pdf_path, host_type)
+            if result:
+                return result
+
+        print(f"[Stage 1] Strategy B: all {len(pdf_locations)} locations failed")
+        return None
+
+    except Exception as e:
+        print(f"[Stage 1] Strategy B error: {e}")
+        return None
+
+
+def _try_download_url(pdf_url: str, pdf_path: str, host_type: str) -> Optional[str]:
+    """
+    Try to download a PDF URL using three escalating methods:
+      1. Plain requests — fastest, works for repository URLs (PMC, EuropePMC, arXiv)
+      2. Playwright headless — handles JS/cookie requirements without Cloudflare
+      3. Playwright visible — handles Cloudflare (real browser fingerprint)
+
+    Repository URLs (PMC, EuropePMC) almost always work with plain requests.
+    Publisher URLs (MDPI, Springer) need visible browser for Cloudflare bypass.
+    """
+    print(f"[Stage 1] Trying: {pdf_url[:70]}...")
+
+    # ── Method 1: plain requests (fast, works for repos) ──────────────────
+    try:
+        r = requests.get(
+            pdf_url,
+            timeout=30,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "application/pdf,*/*",
+            },
+            stream=True,
+            allow_redirects=True,
+        )
+        if r.status_code == 200:
+            ct = r.headers.get("content-type", "")
+            if "pdf" in ct or pdf_url.endswith(".pdf"):
+                with open(pdf_path, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        f.write(chunk)
+                # Verify it's actually a PDF (first 4 bytes = %PDF)
+                with open(pdf_path, "rb") as f:
+                    magic = f.read(4)
+                if magic == b"%PDF":
+                    print(f"[Stage 1] PDF saved via requests ({host_type}): {pdf_path}")
+                    return pdf_path
+                else:
+                    os.remove(pdf_path)
+                    print(f"[Stage 1] Got non-PDF response from requests (got HTML/redirect)")
+    except Exception as e:
+        print(f"[Stage 1] requests method failed: {e}")
+
+    # ── Method 2: Playwright headless (JS/cookie requirements, no Cloudflare) ──
+    result = asyncio.run(_playwright_download_pdf(pdf_url, pdf_path, headless=True))
+    if result:
+        return result
+
+    # ── Method 3: Playwright visible (Cloudflare bypass for publisher URLs) ──
+    # Only worth trying for publisher-hosted URLs — repo URLs don't use Cloudflare
+    if host_type == "publisher":
+        print(f"[Stage 1] Trying visible browser for Cloudflare-protected publisher URL...")
+        result = asyncio.run(_playwright_download_pdf(pdf_url, pdf_path, headless=False))
+        if result:
+            return result
+
+    return None
+
+
+async def _playwright_download_pdf(pdf_url: str, pdf_path: str, headless: bool = True) -> Optional[str]:
+    """
+    Download a PDF using Playwright. Supports both headless (fast, no Cloudflare)
+    and visible (Cloudflare bypass) modes.
+    """
+    USER_AGENT = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = await browser.new_context(
+            user_agent=USER_AGENT,
+            accept_downloads=True,
+        )
+        if not headless:
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+
+        try:
+            page = await context.new_page()
+            
+            # 1. Track inline PDF response bytes via response interceptor
+            pdf_bytes = None
+            async def handle_response(response):
+                nonlocal pdf_bytes
+                try:
+                    ct = response.headers.get("content-type", "")
+                    if "pdf" in ct and response.status == 200:
+                        pdf_bytes = await response.body()
+                except Exception:
+                    pass
+
+            page.on("response", handle_response)
+
+            # 2. Track download events
+            download_event = None
+            async def handle_download(dl):
+                nonlocal download_event
+                download_event = dl
+
+            page.on("download", handle_download)
+
+            # 3. Trigger navigation
+            try:
+                # Wait until commit (headers received), so we don't block forever if it's a download
+                await page.goto(pdf_url, wait_until="commit", timeout=25000)
+            except Exception:
+                # e.g., net::ERR_ABORTED if navigation is aborted due to a download starting
+                pass
+
+            # 4. CAPTCHA/Cloudflare handoff (if visible browser)
+            if not headless:
+                await page.wait_for_timeout(2000)
+                try:
+                    page_text = (await page.content()).lower()
+                    CAPTCHA_SIGNALS = ["captcha", "robot", "unusual traffic", "verify you are human", "cloudflare", "access denied", "blocked"]
+                    if any(sig in page_text for sig in CAPTCHA_SIGNALS):
+                        print(f"\n{'='*60}")
+                        print(f"  Cloudflare/CAPTCHA detected on publisher page.")
+                        print(f"  Please solve it in the browser window that just opened.")
+                        print(f"  Press ENTER here once you've solved it/download has started.")
+                        print(f"{'='*60}")
+                        input("> ")
+                except Exception:
+                    pass
+
+            # 5. Bounded wait for download event or response interception to complete
+            for _ in range(10):
+                if download_event or pdf_bytes:
+                    break
+                await asyncio.sleep(0.5)
+
+            # 6. Save from download event if captured
+            if download_event:
+                await download_event.save_as(pdf_path)
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, "rb") as f:
+                        magic = f.read(4)
+                    if magic == b"%PDF":
+                        mode = "headless" if headless else "visible"
+                        print(f"[Stage 1] PDF saved via download event ({mode}): {pdf_path}")
+                        return pdf_path
+                    else:
+                        os.remove(pdf_path)
+
+            # 7. Save from response intercept if captured
+            if pdf_bytes and pdf_bytes[:4] == b"%PDF":
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes)
+                mode = "headless" if headless else "visible"
+                print(f"[Stage 1] PDF saved via response intercept ({mode}): {pdf_path}")
+                return pdf_path
+
+            return None
+
+        except Exception as e:
+            print(f"[Stage 1] Playwright ({'headless' if headless else 'visible'}) error: {e}")
+            return None
+        finally:
+            await context.close()
+            await browser.close()
+
+
+def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
+    """
+    Waterfall PDF download: Strategy A (NCBI OA) → Strategy B (Unpaywall) → skip.
+    Returns local path on success, None if all strategies fail.
+    A None result is not an error — the pipeline continues on abstract alone.
+    """
+    if not study.full_text_available:
+        print(f"[Stage 1] No free full text flag for PMID {study.pmid} — skipping PDF")
+        return None
+
+    pdf_dir  = Path(ASSETS_DIR) / job_id / "pdf"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = str(pdf_dir / f"{study.pmid}.pdf")
+
+    # Strategy A — NCBI OA FTP service (best for established OA papers)
+    result = _strategy_a_ncbi_oa(study, pdf_path)
+    if result:
+        return result
+
+    # Strategy B — Unpaywall (best for new papers and publisher OA)
+    result = _strategy_b_unpaywall(study, pdf_path)
+    if result:
+        return result
+
+    # Strategy C — graceful skip
+    print(
+        f"[Stage 1] PDF unavailable for PMID {study.pmid} — "
+        f"paper may be too new for OA index, or publisher hasn't deposited yet. "
+        f"Pipeline will continue using abstract text + screenshots."
+    )
+    return None
+
+
 # ─── Part 7: Screenshot via Playwright ───────────────────────────────────────
+#
+# Strategy: visible browser with CAPTCHA handoff
+#
+# PubMed's bot detection is robust enough that no headless trick reliably
+# bypasses it long-term. The cleanest solution for a human-in-the-loop
+# pipeline is to launch a VISIBLE browser, navigate to the page, and if a
+# CAPTCHA appears, print a prompt and wait for the user to solve it manually.
+# Once the abstract is visible, the script takes over and screenshots it.
+#
+# This is also more honest — we're not trying to impersonate a browser,
+# we ARE using a real browser. The user just needs to click "I'm not a robot"
+# when PubMed asks.
+
+ABSTRACT_SELECTORS = [
+    "#abstract",
+    ".abstract-content",
+    "[data-section-type='abstract']",
+    ".abstract",
+]
+
+METADATA_SELECTORS = [
+    ".article-source",
+    ".citation-authors",
+    "#full-view-heading",
+]
+
+CAPTCHA_SIGNALS = [
+    "captcha",
+    "robot",
+    "unusual traffic",
+    "verify you are human",
+    "cloudflare",
+    "access denied",
+    "blocked",
+]
+
 
 async def _screenshot_abstract(pmid: str, job_id: str) -> list[str]:
     """
-    Screenshot the PubMed abstract page using Playwright.
+    Open a VISIBLE browser, navigate to the PubMed abstract page, handle any
+    CAPTCHA by asking the user to solve it, then screenshot the abstract and
+    metadata sections.
 
-    Key fixes vs naive implementation:
-    - Use a real browser User-Agent (PubMed detects headless Chromium by default)
-    - Disable the 'webdriver' navigator property that sites use to detect bots
-    - Wait for DOM content rather than 'networkidle' (more reliable, less timeout-prone)
-    - Try multiple selectors in priority order for resilience against PubMed UI changes
-    - Scroll abstract into view before screenshotting
+    Visible browser is intentional — headless detection is an arms race we
+    don't want to play for a tool with a human already at the keyboard.
     """
     screenshot_dir = Path(ASSETS_DIR) / job_id / "screenshots"
     screenshot_dir.mkdir(parents=True, exist_ok=True)
     paths = []
 
-    # Real Chrome User-Agent — PubMed rejects obvious headless UA strings
-    USER_AGENT = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
+    url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
     async with async_playwright() as p:
+        # headless=False — opens a real visible browser window
         browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-blink-features=AutomationControlled",  # Hide webdriver flag
-            ]
+            headless=False,
+            args=["--no-sandbox"],
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 900},
-            user_agent=USER_AGENT,
             locale="en-US",
-            timezone_id="America/New_York",
         )
-
-        # Mask navigator.webdriver — the primary bot detection signal
-        await context.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
-
         page = await context.new_page()
 
         try:
-            print(f"[Stage 1] Opening PubMed for PMID {pmid}...")
-            await page.goto(
-                f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
-                wait_until="domcontentloaded",   # More reliable than networkidle
-                timeout=30000
-            )
+            print(f"[Stage 1] Opening browser for PMID {pmid}...")
+            print(f"[Stage 1] URL: {url}")
 
-            # Give JS a moment to render dynamic content
-            await page.wait_for_timeout(2000)
+            # Use 'load' instead of 'domcontentloaded' — ensures the full page
+            # including any redirect targets has finished loading before we
+            # attempt to read page.content(). domcontentloaded fires too early
+            # on pages with JS-based redirects, causing the "page is navigating"
+            # error when content() is called immediately after.
+            await page.goto(url, wait_until="load", timeout=30000)
+            await page.wait_for_timeout(1500)
+
+            # ── CAPTCHA detection and handoff loop ───────────────────────────
+            max_captcha_waits = 3
+            captcha_waits = 0
+
+            while captcha_waits < max_captcha_waits:
+
+                # Check if abstract is already visible first — fastest path
+                abstract_visible = False
+                for sel in ABSTRACT_SELECTORS:
+                    try:
+                        el = page.locator(sel).first
+                        await el.wait_for(state="visible", timeout=1500)
+                        abstract_visible = True
+                        break
+                    except Exception:
+                        continue
+
+                if abstract_visible:
+                    break  # Good — skip CAPTCHA check entirely
+
+                # Abstract not visible — check if it's a CAPTCHA page.
+                # Wrap page.content() in try/except: if the page is still
+                # navigating (e.g. a JS redirect is in progress), this call
+                # throws "Unable to retrieve content because the page is
+                # navigating". We catch it, wait, and retry.
+                captcha_detected = False
+                try:
+                    page_text = (await page.content()).lower()
+                    captcha_detected = any(sig in page_text for sig in CAPTCHA_SIGNALS)
+                except Exception:
+                    # Page still navigating — wait and let it settle
+                    await page.wait_for_timeout(2000)
+                    continue
+
+                if captcha_detected:
+                    captcha_waits += 1
+                    print(f"\n{'='*60}")
+                    print(f"  CAPTCHA detected on PubMed page.")
+                    print(f"  Please solve it in the browser window that just opened.")
+                    print(f"  Press ENTER here once you've solved it and the abstract is visible.")
+                    print(f"{'='*60}")
+                    input("> ")
+                    await page.wait_for_timeout(1500)
+                else:
+                    # No CAPTCHA, no abstract — page may still be loading
+                    await page.wait_for_timeout(2000)
+                    break
 
             # ── Abstract screenshot ──────────────────────────────────────────
-            # Try selectors in priority order — PubMed has changed these before
-            abstract_selectors = [
-                "#abstract",
-                ".abstract-content",
-                "[data-section-type='abstract']",
-                ".abstract",
-            ]
-
             abstract_captured = False
-            for selector in abstract_selectors:
+            for selector in ABSTRACT_SELECTORS:
                 try:
                     el = page.locator(selector).first
-                    await el.wait_for(state="visible", timeout=4000)
+                    await el.wait_for(state="visible", timeout=5000)
                     await el.scroll_into_view_if_needed()
-                    await page.wait_for_timeout(300)  # Brief settle after scroll
+                    await page.wait_for_timeout(400)
                     path = str(screenshot_dir / f"{pmid}_abstract.png")
                     await el.screenshot(path=path)
                     paths.append(path)
-                    print(f"[Stage 1] Abstract screenshot saved (selector: {selector})")
+                    print(f"[Stage 1] Abstract screenshot saved")
                     abstract_captured = True
                     break
                 except Exception:
                     continue
 
             if not abstract_captured:
-                # Last resort: full viewport screenshot
-                print(f"[Stage 1] All abstract selectors failed — taking viewport screenshot")
+                # Fallback: screenshot whatever is visible
+                print(f"[Stage 1] Abstract element not found — screenshotting full viewport")
                 path = str(screenshot_dir / f"{pmid}_viewport.png")
                 await page.screenshot(path=path, full_page=False)
                 paths.append(path)
 
-            # ── Metadata screenshot (journal, authors, date) ─────────────────
-            meta_selectors = [
-                ".article-source",
-                ".citation-authors",
-                "#full-view-heading",
-            ]
-            for selector in meta_selectors:
+            # ── Metadata screenshot ──────────────────────────────────────────
+            for selector in METADATA_SELECTORS:
                 try:
                     el = page.locator(selector).first
                     await el.wait_for(state="visible", timeout=3000)
