@@ -502,7 +502,8 @@ def run(job_id: str) -> dict:
     errored_here = job["status"] == "error" and job.get("error", {}).get("stage") == "stage_3"
     if job["status"] != "stage_2_complete" and not errored_here:
         return mark_error(job, f"Job status is '{job['status']}' — expected 'stage_2_complete'")
-    job.pop("error", None)  # clear previous error so a clean run doesn't leave stale error block
+    job.pop("error", None)
+    job["status"] = "stage_2_complete"  # restore in case we're retrying a previous error
 
     study  = job.get("study")
     claims = job.get("claims")

@@ -231,6 +231,7 @@ def run(job_id: str) -> dict:
     if job["status"] != "stage_3_complete" and not errored_here:
         return mark_error(job, f"Job status is '{job['status']}' — expected 'stage_3_complete'")
     job.pop("error", None)
+    job["status"] = "stage_3_complete"  # restore in case we're retrying a previous error
 
     broll_search_tags = job.get("content", {}).get("broll_search_tags")
     if not broll_search_tags:
@@ -307,7 +308,7 @@ def run(job_id: str) -> dict:
         broll_video_paths.append({"segment_name": seg_name, "paths": collected})
 
     # ── Persist to job ────────────────────────────────────────────────────────
-    if "assets" not in job:
+    if not job.get("assets"):
         job["assets"] = {}
     job["assets"]["broll_video_paths"] = broll_video_paths
     if missing_segments:
@@ -360,7 +361,7 @@ if __name__ == "__main__":
 
     result = run(job_id)
     print(f"\nFinal status : {result['status']}")
-    if result["status"] == "error":
+    if result.get("error"):
         print(f"Error        : {result['error']['message']}")
     else:
         paths_count = sum(len(s["paths"]) for s in result.get("assets", {}).get("broll_video_paths", []))
