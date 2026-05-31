@@ -33,14 +33,17 @@ export function JobDataExplorer({ job }: { job: Job }) {
                       href={assetUrl(p)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="shrink-0"
+                      className="group relative h-32 w-48 shrink-0 overflow-hidden rounded border border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={assetUrl(p)}
                         alt={`Screenshot ${i + 1}`}
-                        className="h-40 w-auto rounded border border-zinc-200 object-contain hover:opacity-80 dark:border-zinc-700"
+                        className="h-full w-full object-cover transition-transform group-hover:scale-105"
                       />
+                      <div className="absolute inset-x-0 bottom-0 bg-black/40 px-2 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        View Full Screenshot
+                      </div>
                     </a>
                   ))}
                 </div>
