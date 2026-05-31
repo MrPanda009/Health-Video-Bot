@@ -185,7 +185,7 @@ def fetch_from_pixabay(search_term: str, min_duration: int) -> list[tuple[str, i
 
 # ─── Download ─────────────────────────────────────────────────────────────────
 
-def download_clip(url: str, dest_path: Path) -> bool:
+def download_clip(url: str, dest_path: Path, duration: int = 0) -> bool:
     """
     Stream-download a video clip to dest_path.
     Deletes the partial file on failure. Returns True on success.
@@ -194,12 +194,26 @@ def download_clip(url: str, dest_path: Path) -> bool:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         with requests.get(url, stream=True, timeout=120) as r:
             r.raise_for_status()
+            total_size = int(r.headers.get("content-length", 0))
+            downloaded = 0
             with open(dest_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        percent = int(downloaded * 100 / total_size)
+                        bar_len = 20
+                        filled = int(bar_len * downloaded / total_size)
+                        bar = '█' * filled + '-' * (bar_len - filled)
+                        sys.stdout.write(f"\r[Stage 4a]   ↓ {dest_path.name}  ({duration}s) [{bar}] {percent}%")
+                    else:
+                        mb = downloaded / (1024 * 1024)
+                        sys.stdout.write(f"\r[Stage 4a]   ↓ {dest_path.name}  ({duration}s) [ Downloading... ] {mb:.1f}MB")
+                    sys.stdout.flush()
+            sys.stdout.write("\n")
         return True
     except Exception as e:
-        print(f"[Stage 4a]   Download failed ({url[:60]}...): {e}")
+        print(f"\n[Stage 4a]   Download failed ({url[:60]}...): {e}")
         if dest_path.exists():
             dest_path.unlink()
         return False
@@ -288,8 +302,7 @@ def run(job_id: str) -> dict:
                 if len(collected) >= CLIPS_PER_SEGMENT:
                     break
                 dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
-                print(f"[Stage 4a]   ↓ {dest.name}  ({duration}s)")
-                if download_clip(url, dest):
+                if download_clip(url, dest, duration):
                     # Cache only the first successfully downloaded clip per term
                     if first_download_for_term and not cached.exists():
                         shutil.copy2(dest, cached)
