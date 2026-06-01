@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { rm } from 'fs/promises'
 import type { Job, JobStatus } from '@/lib/types'
 
 const PIPELINE_ROOT = process.env.PIPELINE_ROOT ?? path.resolve(process.cwd(), '..')
@@ -56,4 +57,25 @@ export async function PATCH(
   fs.writeFileSync(jobPath(jobId), JSON.stringify(job, null, 2))
 
   return Response.json({ job })
+}
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ jobId: string }> },
+) {
+  const { jobId } = await params
+
+  const jPath = jobPath(jobId)
+  if (!fs.existsSync(jPath)) return Response.json({ error: 'Job not found' }, { status: 404 })
+
+  // Delete job JSON
+  fs.unlinkSync(jPath)
+
+  // Delete assets directory (mirrors stage_0_clean.py delete_job_data)
+  const assetsDir = path.join(PIPELINE_ROOT, 'assets', jobId)
+  if (fs.existsSync(assetsDir)) {
+    await rm(assetsDir, { recursive: true, force: true })
+  }
+
+  return Response.json({ ok: true })
 }

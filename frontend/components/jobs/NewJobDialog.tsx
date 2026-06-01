@@ -57,7 +57,10 @@ export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
       const data = await res.json()
       onCreated()
       onClose()
-      router.push(`/jobs/${data.job_id}`)
+      const qs = new URLSearchParams({ autoStart: 'true' })
+      if (topic.trim()) qs.set('topic', topic.trim())
+      if (pmid.trim()) qs.set('pmid', pmid.trim())
+      router.push(`/jobs/${data.job_id}?${qs.toString()}`)
     } catch (err) {
       setError(String(err))
     } finally {

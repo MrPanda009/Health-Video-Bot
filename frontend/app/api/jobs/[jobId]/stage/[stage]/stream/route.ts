@@ -2,6 +2,7 @@ import path from 'path'
 import fs from 'fs'
 import { spawn } from 'child_process'
 import { STAGES } from '@/lib/pipeline-config'
+import { activeStdin } from '@/lib/active-processes'
 import type { StageStreamEvent } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -36,10 +37,11 @@ export async function GET(
   const scriptPath = path.join(PIPELINE_ROOT, stageDef.script)
   const pythonBin = resolvePython()
 
-  // Stage 1 gets topic + pmid as args; all others get jobId
+  // Stage 1: topic, pmid, '' (aspect_ratio default), jobId as pre_created_job_id
+  // All other stages: jobId only
   const args =
     stage === 'stage_1'
-      ? [scriptPath, ...(topic ? [topic] : []), ...(pmid ? [pmid] : [])]
+      ? [scriptPath, topic, pmid, '', jobId]
       : [scriptPath, jobId]
 
   const encoder = new TextEncoder()
@@ -59,8 +61,21 @@ export async function GET(
         env: { ...process.env, PYTHONUNBUFFERED: '1' },
       })
 
+      // Register stdin so the /stdin relay endpoint can write to it
+      if (stage === 'stage_1' && proc.stdin) {
+        activeStdin.set(jobId, proc.stdin)
+        proc.on('close', () => activeStdin.delete(jobId))
+      }
+
+      let awaitingInputSent = false
       proc.stdout.on('data', (chunk: Buffer) => {
-        send({ type: 'stdout', data: chunk.toString() })
+        const text = chunk.toString()
+        send({ type: 'stdout', data: text })
+        // Detect the study-selection prompt and notify the client
+        if (!awaitingInputSent && text.includes('Select a study')) {
+          awaitingInputSent = true
+          send({ type: 'awaiting_input', data: '' })
+        }
       })
 
       proc.stderr.on('data', (chunk: Buffer) => {
@@ -76,16 +91,6 @@ export async function GET(
         send({ type: 'error', data: err.message })
         controller.close()
       })
-
-      // When no PMID given for stage 1, auto-select the top candidate after a delay
-      if (stage === 'stage_1' && !pmid) {
-        const timer = setTimeout(() => {
-          if (!proc.killed && proc.stdin?.writable) {
-            proc.stdin.write('1\n')
-          }
-        }, 20_000)
-        proc.on('close', () => clearTimeout(timer))
-      }
 
       request.signal.addEventListener('abort', () => {
         proc.kill('SIGTERM')

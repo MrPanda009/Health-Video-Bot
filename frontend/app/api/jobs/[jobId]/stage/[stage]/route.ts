@@ -66,14 +66,20 @@ export async function POST(
     const stageDef = STAGES.find((s) => s.key === stage)
     if (!stageDef) return Response.json({ error: 'Unknown stage' }, { status: 400 })
 
-    const currentIdx = STATUS_ORDER.indexOf(job.status as JobStatus | 'created')
-    const prereqIdx = STATUS_ORDER.indexOf(stageDef.prerequisite)
+    // Allow retry when the job errored on this same stage
+    const isErrorRetry =
+      job.status === 'error' && (job.error as { stage?: string } | null)?.stage === stage
 
-    if (currentIdx < prereqIdx) {
-      return Response.json(
-        { error: `Job must be at '${stageDef.prerequisite}' to run this stage` },
-        { status: 409 },
-      )
+    if (!isErrorRetry) {
+      const currentIdx = STATUS_ORDER.indexOf(job.status as JobStatus | 'created')
+      const prereqIdx = STATUS_ORDER.indexOf(stageDef.prerequisite)
+
+      if (currentIdx < prereqIdx) {
+        return Response.json(
+          { error: `Job must be at '${stageDef.prerequisite}' to run this stage` },
+          { status: 409 },
+        )
+      }
     }
 
     // Return stream URL for the client to open

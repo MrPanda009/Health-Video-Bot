@@ -42,9 +42,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}))
-  const { topic, pmid, aspect_ratio } = body as {
+  const { topic, aspect_ratio } = body as {
     topic?: string
-    pmid?: string
     aspect_ratio?: string
   }
 
@@ -52,7 +51,8 @@ export async function POST(request: Request) {
   const resolvedAspectRatio =
     aspect_ratio && validAspectRatios.includes(aspect_ratio) ? aspect_ratio : '9:16'
 
-  // Pre-create the job JSON so we can return a job_id immediately and redirect
+  // Pre-create the job JSON so we can return a job_id immediately and redirect.
+  // Stage 1 is kicked off via the SSE stream on the job page (not a detached subprocess).
   const { randomUUID } = await import('crypto')
   const jobId = randomUUID()
   const now = new Date().toISOString()
@@ -73,25 +73,5 @@ export async function POST(request: Request) {
   fs.mkdirSync(JOBS_DIR, { recursive: true })
   fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), JSON.stringify(initialJob, null, 2))
 
-  const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3'
-  const pythonBin = PYTHON_BIN.startsWith('.')
-    ? path.join(PIPELINE_ROOT, PYTHON_BIN)
-    : PYTHON_BIN
-
-  const args = [path.join(PIPELINE_ROOT, 'stages/stage_1_research.py')]
-  args.push(topic ?? '')
-  args.push(pmid ?? '')
-  args.push(resolvedAspectRatio)
-  args.push(jobId)
-
-  const { spawn } = await import('child_process')
-  const proc = spawn(pythonBin, args, {
-    cwd: PIPELINE_ROOT,
-    env: process.env,
-    detached: true,
-    stdio: 'ignore',
-  })
-  proc.unref()
-
-  return Response.json({ job_id: jobId, message: 'Job creation started' }, { status: 202 })
+  return Response.json({ job_id: jobId, message: 'Job created' }, { status: 201 })
 }

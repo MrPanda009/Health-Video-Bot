@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Settings2, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Settings2, ExternalLink, Trash2 } from 'lucide-react'
 import { useJob } from '@/hooks/useJob'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { ErrorBanner } from '@/components/ui/ErrorBanner'
@@ -13,9 +13,26 @@ import { JobDataExplorer } from '@/components/explorer/JobDataExplorer'
 import { CopyButton } from '@/components/terminal/CopyButton'
 
 export default function JobDetailPage() {
+  const router = useRouter()
   const { jobId } = useParams<{ jobId: string }>()
+  const searchParams = useSearchParams()
+  const autoStart = searchParams.get('autoStart') === 'true'
+  const autoTopic = searchParams.get('topic') ?? undefined
+  const autoPmid = searchParams.get('pmid') ?? undefined
   const [isRunning, setIsRunning] = useState(false)
   const [showOverride, setShowOverride] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const handleDelete = useCallback(async () => {
+    if (!confirm('Delete this job and all its assets? This cannot be undone.')) return
+    setDeleting(true)
+    try {
+      await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' })
+      router.push('/jobs')
+    } finally {
+      setDeleting(false)
+    }
+  }, [jobId, router])
   const { job, isLoading, mutate } = useJob(jobId, isRunning)
   const handleJobUpdated = useCallback(() => {
     mutate()
@@ -79,12 +96,12 @@ export default function JobDetailPage() {
           </div>
 
           <h1 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">
-            {job.content?.title ?? job.study?.title ?? 'Untitled Job'}
+            {job.content?.title ?? job.study?.title ?? job.topic ?? 'Untitled Job'}
           </h1>
 
-          {job.study?.topic && (
+          {(job.study?.topic ?? job.topic) && (
             <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Topic: {job.study.topic}
+              Topic: {job.study?.topic ?? job.topic}
             </p>
           )}
 
@@ -105,6 +122,8 @@ export default function JobDetailPage() {
             <PipelineTimeline
               job={job}
               onJobUpdated={handleJobUpdated}
+              autoStart={autoStart}
+              autoStartParams={autoStart ? { topic: autoTopic, pmid: autoPmid } : undefined}
             />
           </div>
         </section>
@@ -115,6 +134,29 @@ export default function JobDetailPage() {
             Job Data
           </h2>
           <JobDataExplorer job={job} />
+        </section>
+
+        {/* Danger zone */}
+        <section className="mt-8 border-t border-zinc-200 pt-8 dark:border-zinc-800">
+          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            Danger Zone
+          </h2>
+          <div className="flex items-center justify-between rounded-lg border border-red-200 bg-red-50 px-4 py-3 dark:border-red-900 dark:bg-red-950/40">
+            <div>
+              <p className="text-sm font-medium text-red-700 dark:text-red-400">Delete this job</p>
+              <p className="text-xs text-red-500 dark:text-red-500">
+                Permanently removes the job file and all assets. Cannot be undone.
+              </p>
+            </div>
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              <Trash2 size={14} />
+              {deleting ? 'Deleting…' : 'Delete Job'}
+            </button>
+          </div>
         </section>
       </div>
 

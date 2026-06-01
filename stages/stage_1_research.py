@@ -709,7 +709,10 @@ async def _playwright_download_pdf(pdf_url: str, pdf_path: str, headless: bool =
                         print(f"  Please solve it in the browser window that just opened.")
                         print(f"  Press ENTER here once you've solved it/download has started.")
                         print(f"{'='*60}")
-                        input("> ")
+                        try:
+                            input("> ")
+                        except EOFError:
+                            pass  # non-interactive: skip CAPTCHA wait
                 except Exception:
                     pass
 
@@ -901,7 +904,10 @@ async def _screenshot_abstract(pmid: str, job_id: str) -> list[str]:
                     print(f"  Please solve it in the browser window that just opened.")
                     print(f"  Press ENTER here once you've solved it and the abstract is visible.")
                     print(f"{'='*60}")
-                    input("> ")
+                    try:
+                        input("> ")
+                    except EOFError:
+                        pass  # non-interactive: skip CAPTCHA wait
                     await page.wait_for_timeout(1500)
                 else:
                     # No CAPTCHA, no abstract — page may still be loading
@@ -1050,7 +1056,11 @@ def run(
             selected_pmid = pmid_override
         else:
             print("Select a study — enter 1, 2, or 3 (or paste a PMID directly):")
-            choice = input("> ").strip()
+            try:
+                choice = input("> ").strip()
+            except EOFError:
+                choice = "1"
+                print("[Stage 1] Non-interactive mode — auto-selecting top-ranked candidate")
             if choice in ("1", "2", "3"):
                 selected_pmid = candidates[int(choice) - 1].pmid
             elif choice.isdigit() and len(choice) > 3:

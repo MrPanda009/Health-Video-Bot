@@ -13,6 +13,7 @@ export function useStageStream(jobId: string) {
   const [lines, setLines] = useState<string[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [exitCode, setExitCode] = useState<number | null>(null)
+  const [awaitingInput, setAwaitingInput] = useState(false)
   const esRef = useRef<EventSource | null>(null)
 
   const stop = useCallback(() => {
@@ -28,6 +29,7 @@ export function useStageStream(jobId: string) {
     setLines([])
     setIsRunning(false)
     setExitCode(null)
+    setAwaitingInput(false)
   }, [])
 
   const start = useCallback(
@@ -46,19 +48,24 @@ export function useStageStream(jobId: string) {
       setLines([])
       setIsRunning(true)
       setExitCode(null)
+      setAwaitingInput(false)
 
       es.onmessage = (e) => {
         const event: StageStreamEvent = JSON.parse(e.data)
         if (event.type === 'stdout' || event.type === 'stderr') {
           setLines((prev) => [...prev, event.data])
+        } else if (event.type === 'awaiting_input') {
+          setAwaitingInput(true)
         } else if (event.type === 'exit') {
           setExitCode(event.exitCode ?? -1)
           setIsRunning(false)
+          setAwaitingInput(false)
           es.close()
           esRef.current = null
         } else if (event.type === 'error') {
           setLines((prev) => [...prev, `\x1b[31mERROR: ${event.data}\x1b[0m\n`])
           setIsRunning(false)
+          setAwaitingInput(false)
           es.close()
           esRef.current = null
         }
@@ -79,5 +86,17 @@ export function useStageStream(jobId: string) {
     }
   }, [])
 
-  return { activeStage, lines, isRunning, exitCode, start, stop, clear }
+  const sendInput = useCallback(
+    async (data: string) => {
+      setAwaitingInput(false)
+      await fetch(`/api/jobs/${jobId}/stdin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data }),
+      })
+    },
+    [jobId],
+  )
+
+  return { activeStage, lines, isRunning, exitCode, awaitingInput, start, stop, clear, sendInput }
 }

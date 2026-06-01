@@ -169,7 +169,7 @@ export interface StageDefinition {
 }
 
 export interface StageStreamEvent {
-  type: 'stdout' | 'stderr' | 'exit' | 'error'
+  type: 'stdout' | 'stderr' | 'exit' | 'error' | 'awaiting_input'
   data: string
   exitCode?: number
 }
