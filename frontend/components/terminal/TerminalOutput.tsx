@@ -14,10 +14,14 @@ interface TerminalOutputProps {
 }
 
 export function TerminalOutput({ lines, isRunning, exitCode }: TerminalOutputProps) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const el = containerRef.current
+    if (!el) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [lines])
 
   const plainText = useMemo(() => lines.join(''), [lines])
@@ -47,7 +51,7 @@ export function TerminalOutput({ lines, isRunning, exitCode }: TerminalOutputPro
           {plainText && <CopyButton text={plainText} />}
         </div>
       </div>
-      <div className="max-h-96 overflow-y-auto p-3">
+      <div ref={containerRef} className="max-h-96 overflow-y-auto p-3">
         <pre className="font-mono text-xs leading-5 text-zinc-200">
           {lines.map((line, i) => (
             <span

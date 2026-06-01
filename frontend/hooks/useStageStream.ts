@@ -3,6 +3,39 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { StageKey, StageStreamEvent } from '@/lib/types'
 
+/**
+ * Merge an incoming chunk into the line buffer, honouring carriage returns.
+ *
+ * \r without a following \n means "go back to start of the current line" —
+ * the standard trick used by tqdm, MoviePy's progress bar, and wget-style
+ * downloaders to overwrite a single line in place.
+ *
+ * The buffer is an array of strings where every element except the last ends
+ * with \n.  The last element is the "current line" still being written.
+ */
+function applyChunk(prev: string[], chunk: string): string[] {
+  const lines = [...prev]
+  // Pop the current (partial) line so we can append to it
+  let current = lines.length > 0 ? lines.pop()! : ''
+
+  // Split on \r\n, \n, or bare \r — keeping the separators as tokens
+  const parts = chunk.split(/(\r\n|\n|\r)/)
+
+  for (const part of parts) {
+    if (part === '\r\n' || part === '\n') {
+      lines.push(current + part)
+      current = ''
+    } else if (part === '\r') {
+      current = '' // overwrite current line from the beginning
+    } else {
+      current += part
+    }
+  }
+
+  lines.push(current)
+  return lines
+}
+
 export interface StreamParams {
   topic?: string
   pmid?: string
@@ -53,7 +86,7 @@ export function useStageStream(jobId: string) {
       es.onmessage = (e) => {
         const event: StageStreamEvent = JSON.parse(e.data)
         if (event.type === 'stdout' || event.type === 'stderr') {
-          setLines((prev) => [...prev, event.data])
+          setLines((prev) => applyChunk(prev, event.data))
         } else if (event.type === 'awaiting_input') {
           setAwaitingInput(true)
         } else if (event.type === 'exit') {
