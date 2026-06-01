@@ -166,6 +166,8 @@ export interface StageDefinition {
   script: string
   prerequisite: JobStatus | 'created'
   completedStatus: JobStatus | null
+  /** For sub-stages that don't set a job status, derive completion from job data. */
+  isComplete?: (job: Job) => boolean
 }
 
 export interface StageStreamEvent {

@@ -1,4 +1,4 @@
-import type { JobStatus, StageDefinition, StageKey } from './types'
+import type { Job, JobStatus, StageDefinition, StageKey } from './types'
 
 export const STATUS_ORDER: (JobStatus | 'created')[] = [
   'created',
@@ -38,6 +38,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_4a_broll.py',
     prerequisite: 'stage_3_complete',
     completedStatus: null,
+    isComplete: (job) => Array.isArray(job.assets?.broll_video_paths) && job.assets.broll_video_paths.length > 0,
   },
   {
     key: 'stage_4b',
@@ -45,6 +46,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_4b_thumbnail.py',
     prerequisite: 'stage_3_complete',
     completedStatus: null,
+    isComplete: (job) => Array.isArray(job.assets?.thumbnail_paths) && job.assets.thumbnail_paths.length > 0,
   },
   {
     key: 'stage_4c',
@@ -52,6 +54,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_4c_voiceover.py',
     prerequisite: 'stage_3_complete',
     completedStatus: null,
+    isComplete: (job) => !!job.assets?.voiceover_path,
   },
   {
     key: 'stage_4d',
@@ -59,6 +62,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_4d_captions.py',
     prerequisite: 'stage_3_complete',
     completedStatus: null,
+    isComplete: (job) => !!job.assets?.srt_path,
   },
   {
     key: 'stage_5',
@@ -92,6 +96,7 @@ export function getStageUIState(
   stage: StageDefinition,
   jobStatus: JobStatus,
   errorStage?: string | null,
+  job?: Job,
 ): StageUIState {
   if (jobStatus === 'error' && errorStage === stage.key) return 'error'
 
@@ -103,8 +108,9 @@ export function getStageUIState(
     if (currentIdx >= completedIdx) return 'complete'
   }
 
-  // Sub-stages (no completedStatus): complete if job has moved past stage_4_complete
+  // Sub-stages: use isComplete(job) if available, otherwise fall back to stage_4_complete
   if (!stage.completedStatus) {
+    if (stage.isComplete && job && stage.isComplete(job)) return 'complete'
     const stage4Idx = getStatusIndex('stage_4_complete')
     if (currentIdx >= stage4Idx) return 'complete'
   }

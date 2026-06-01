@@ -117,7 +117,7 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
                   <StageRow
                     key={sub.key}
                     stage={sub}
-                    uiState={getStageUIState(sub, job.status, job.error?.stage)}
+                    uiState={getStageUIState(sub, job.status, job.error?.stage, job)}
                     onRun={handleRun}
                     onSkip={(k) => handleSkip(k as StageKey)}
                     isRunning={stream.activeStage === sub.key && stream.isRunning}
