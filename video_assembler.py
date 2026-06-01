@@ -220,7 +220,8 @@ def assemble(
                 flush=True,
             )
             broll = VideoFileClip(str(clip_path)).without_audio()
-            broll = _scale_and_crop(broll, base_w, base_h)
+            scale = min(base_w / broll.w, base_h / broll.h)
+            broll = broll.resized(scale).with_position("center")
             broll = _loop_to_duration(broll, needed)
             segments.append(broll)
         else:
@@ -247,9 +248,9 @@ def assemble(
         final = base
     else:
         print(f"[assembler] Concatenating {len(segments)} segment(s)…", flush=True)
-        video_track = concatenate_videoclips(segments)
-        # Restore base audio across the full timeline
-        final = video_track.with_audio(base_audio) if base_audio else video_track
+        video_track = concatenate_videoclips(segments, size=(base_w, base_h))
+        final = video_track.with_duration(base_duration)
+        final = final.with_audio(base_audio) if base_audio else final
 
     # ── Render ────────────────────────────────────────────────────────────────
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
