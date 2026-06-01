@@ -141,6 +141,7 @@ export interface Job {
   updated_at: string
   status: JobStatus
   aspect_ratio: '9:16' | '16:9'
+  topic?: string | null
   error: JobError | null
   study: Study | null
   claims: Claims | null

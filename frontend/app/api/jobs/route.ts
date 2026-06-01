@@ -11,7 +11,7 @@ function summarize(job: Job): JobSummary {
     status: job.status,
     created_at: job.created_at,
     updated_at: job.updated_at,
-    topic: job.study?.topic ?? null,
+    topic: job.study?.topic ?? job.topic ?? null,
     title: job.content?.title ?? null,
     error: job.error ?? null,
   }
@@ -52,6 +52,27 @@ export async function POST(request: Request) {
   const resolvedAspectRatio =
     aspect_ratio && validAspectRatios.includes(aspect_ratio) ? aspect_ratio : '9:16'
 
+  // Pre-create the job JSON so we can return a job_id immediately and redirect
+  const { randomUUID } = await import('crypto')
+  const jobId = randomUUID()
+  const now = new Date().toISOString()
+  const initialJob = {
+    job_id: jobId,
+    created_at: now,
+    updated_at: now,
+    status: 'created',
+    aspect_ratio: resolvedAspectRatio,
+    topic: topic || null,
+    error: null,
+    study: null,
+    claims: null,
+    content: null,
+    assets: null,
+    output: null,
+  }
+  fs.mkdirSync(JOBS_DIR, { recursive: true })
+  fs.writeFileSync(path.join(JOBS_DIR, `${jobId}.json`), JSON.stringify(initialJob, null, 2))
+
   const PYTHON_BIN = process.env.PYTHON_BIN ?? 'python3'
   const pythonBin = PYTHON_BIN.startsWith('.')
     ? path.join(PIPELINE_ROOT, PYTHON_BIN)
@@ -61,6 +82,7 @@ export async function POST(request: Request) {
   args.push(topic ?? '')
   args.push(pmid ?? '')
   args.push(resolvedAspectRatio)
+  args.push(jobId)
 
   const { spawn } = await import('child_process')
   const proc = spawn(pythonBin, args, {
@@ -71,5 +93,5 @@ export async function POST(request: Request) {
   })
   proc.unref()
 
-  return Response.json({ message: 'Job creation started' }, { status: 202 })
+  return Response.json({ job_id: jobId, message: 'Job creation started' }, { status: 202 })
 }

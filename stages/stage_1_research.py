@@ -96,18 +96,20 @@ def save_job(job: dict) -> None:
         json.dump(job, f, ensure_ascii=False, indent=2)
 
 
-def create_job(topic: str, aspect_ratio: str = "9:16") -> dict:
+def create_job(topic: str, aspect_ratio: str = "9:16", job_id: Optional[str] = None) -> dict:
     """Create a fresh job object and save it to disk."""
     if aspect_ratio not in ("9:16", "16:9"):
         aspect_ratio = "9:16"
     Path(JOBS_DIR).mkdir(exist_ok=True)
-    job_id = str(uuid.uuid4())
+    if job_id is None:
+        job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "status": "created",
         "aspect_ratio": aspect_ratio,
+        "topic": topic,
         "error": None,
         "study": None,
         "claims": None,
@@ -976,17 +978,24 @@ def display_candidates(candidates: list[StudyCandidate]) -> None:
 
 # ─── Main entry point ─────────────────────────────────────────────────────────
 
-def run(topic: str = None, pmid_override: str = None, aspect_ratio: str = "9:16") -> dict:
+def run(
+    topic: str = None,
+    pmid_override: str = None,
+    aspect_ratio: str = "9:16",
+    pre_created_job_id: Optional[str] = None,
+) -> dict:
     """
     Main Stage 1 runner.
 
     Args:
-        topic:         Search topic. If None, uses first item in
-                       niche_profile.research.topic_rotation.
-        pmid_override: Skip search entirely and use this PMID directly.
-                       Useful for manual curation or re-runs.
-        aspect_ratio:  Output video format — "9:16" (1080×1920 Shorts) or
-                       "16:9" (1920×1080 landscape). Default: "9:16".
+        topic:               Search topic. If None, uses first item in
+                             niche_profile.research.topic_rotation.
+        pmid_override:       Skip search entirely and use this PMID directly.
+                             Useful for manual curation or re-runs.
+        aspect_ratio:        Output video format — "9:16" (1080×1920 Shorts) or
+                             "16:9" (1920×1080 landscape). Default: "9:16".
+        pre_created_job_id:  If the frontend pre-created the job JSON, pass its ID
+                             here to load it instead of calling create_job().
 
     Returns:
         Job dict with study{} populated and status "stage_1_complete",
@@ -998,7 +1007,19 @@ def run(topic: str = None, pmid_override: str = None, aspect_ratio: str = "9:16"
         topic = profile["research"]["topic_rotation"][0]
         print(f"[Stage 1] No topic provided — using rotation: '{topic}'")
 
-    job    = create_job(topic, aspect_ratio=aspect_ratio)
+    if pre_created_job_id:
+        job_path = Path(JOBS_DIR) / f"{pre_created_job_id}.json"
+        if job_path.exists():
+            with open(job_path, encoding="utf-8") as f:
+                job = json.load(f)
+            # Create asset dirs in case the frontend didn't
+            for subdir in ["screenshots", "pdf", "broll", "thumbnails", "audio", "captions", "output"]:
+                (Path(ASSETS_DIR) / pre_created_job_id / subdir).mkdir(parents=True, exist_ok=True)
+            print(f"[Stage 1] Loaded pre-created job: {pre_created_job_id}")
+        else:
+            job = create_job(topic, aspect_ratio=aspect_ratio, job_id=pre_created_job_id)
+    else:
+        job = create_job(topic, aspect_ratio=aspect_ratio)
     job_id = job["job_id"]
 
     try:
@@ -1086,14 +1107,16 @@ if __name__ == "__main__":
     #   python stage_1_research.py "diabetes" "" 16:9
     #       Searches topic, auto-selects, outputs 1920×1080 landscape video
 
-    topic_arg        = sys.argv[1] if len(sys.argv) > 1 else None
-    pmid_arg         = sys.argv[2] if len(sys.argv) > 2 else None
-    aspect_ratio_arg = sys.argv[3] if len(sys.argv) > 3 else "9:16"
+    topic_arg           = sys.argv[1] if len(sys.argv) > 1 else None
+    pmid_arg            = sys.argv[2] if len(sys.argv) > 2 else None
+    aspect_ratio_arg    = sys.argv[3] if len(sys.argv) > 3 else "9:16"
+    pre_created_job_id  = sys.argv[4] if len(sys.argv) > 4 else None
 
     result = run(
         topic=topic_arg if topic_arg else None,
         pmid_override=pmid_arg if pmid_arg else None,
         aspect_ratio=aspect_ratio_arg,
+        pre_created_job_id=pre_created_job_id if pre_created_job_id else None,
     )
 
     print(f"\nFinal status : {result['status']}")

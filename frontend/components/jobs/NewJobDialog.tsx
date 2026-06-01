@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { X, Info, Monitor, Smartphone } from 'lucide-react'
 
 interface NewJobDialogProps {
@@ -27,6 +28,7 @@ const ASPECT_OPTIONS: { value: AspectRatio; label: string; sub: string; Icon: ty
   ]
 
 export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
+  const router = useRouter()
   const [topic, setTopic] = useState('')
   const [pmid, setPmid] = useState('')
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('9:16')
@@ -52,8 +54,10 @@ export function NewJobDialog({ onClose, onCreated }: NewJobDialogProps) {
         setError(d.error ?? 'Failed to create job')
         return
       }
+      const data = await res.json()
       onCreated()
       onClose()
+      router.push(`/jobs/${data.job_id}`)
     } catch (err) {
       setError(String(err))
     } finally {
