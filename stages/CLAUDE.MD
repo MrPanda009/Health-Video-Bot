@@ -3,11 +3,11 @@
 Detailed specifications for every stage. The root `CLAUDE.md` covers coding patterns
 and conventions that apply to all stages. This file covers what each stage specifically does.
 
-Stages 1–3 are complete. This file focuses on Stages 4a–4d, 5, and 6.
+Stages 1–5 are complete. Stage 6 (YouTube upload) is TODO.
 
 ---
 
-## Stage 4a — B-roll Download (`stage_4a_broll.py`)
+## Stage 4a — B-roll Download (`stage_4a_broll.py`) ✅
 
 **Input:** `job["content"]["broll_search_tags"]` — list of `{segment_name, search_terms}`
 **Output:** `job["assets"]["broll_video_paths"]` — list of `{segment_name, paths: [path1, path2]}`
@@ -53,7 +53,7 @@ resp = requests.get("https://pixabay.com/api/videos/", params=params)
 
 ---
 
-## Stage 4b — Thumbnail Generation (`stage_4b_thumbnail.py`)
+## Stage 4b — Thumbnail Generation (`stage_4b_thumbnail.py`) ✅
 
 **Input:** `job["content"]["thumbnail_prompts"]` — 3 items: data_visual, human_lifestyle, concept_abstract
 **Output:** `job["assets"]["thumbnail_paths"]` — list of `{variant_id, path}`
@@ -94,7 +94,7 @@ images = model.generate_images(prompt=full_prompt, number_of_images=1,
 ### Prompt enhancement
 Prepend this to every thumbnail prompt (from niche profile):
 ```
-"{prompt}. Style: {niche_profile.thumbnail.art_direction}. 
+"{prompt}. Style: {niche_profile.thumbnail.art_direction}.
 Text overlay rules: {niche_profile.thumbnail.text_overlay_rules}.
 Do not include any text in the image — text will be added as overlay separately."
 ```
@@ -109,7 +109,7 @@ img.save(output_path, "PNG")
 
 ---
 
-## Stage 4c — Voiceover Generation (`stage_4c_voiceover.py`)
+## Stage 4c — Voiceover Generation (`stage_4c_voiceover.py`) ✅
 
 **Input:** `job["content"]["hindi_script"]`
 **Output:** `job["assets"]["voiceover_path"]`, `job["assets"]["voiceover_duration_seconds"]`
@@ -161,165 +161,213 @@ duration_seconds = len(audio) / 1000.0
 
 ---
 
-## Stage 4d — Caption Generation (`stage_4d_captions.py`)
+## Stage 4d — Captions (`stage_4d_captions.py`) ✅
 
 **Input:** `job["assets"]["voiceover_path"]` (WAV file from Stage 4c)
-**Output:** `job["assets"]["srt_path"]`, `job["assets"]["ass_path"]`,
-           `job["assets"]["whisper_word_timestamps"]`
-**Status:** contributes to `stage_4_complete`
+**Output:** `job["assets"]["srt_path"]`, `job["assets"]["whisper_word_timestamps"]`
+**Status:** contributes to `stage_4_complete` (does NOT set status itself)
 
 ### What it does
-1. Run Whisper on the voiceover WAV to get word-level timestamps
-2. Generate SRT file (for YouTube upload — accessibility + SEO)
-3. Generate ASS file (for burning into the video in Stage 5)
-4. Map timestamps back to `script_segments` so Stage 5 knows B-roll timing
+1. Guards that `whisperx` is installed — marks job error with pip install instructions if not
+2. Guards that the voiceover file exists
+3. Calls `whisperx_transcriber.transcribe(voiceover_path, language="hi")` for word-level timestamps
+4. Converts segments to SRT format
+5. Saves `assets/{job_id}/captions/word_timestamps.json` and `captions.srt`
+6. Writes `job["assets"]["whisper_word_timestamps"]` and `job["assets"]["srt_path"]`
 
-### Whisper call (faster-whisper, local)
+### Implementation detail
+Stage 4d imports from `whisperx_transcriber.py` (project root, one level up from `stages/`):
 ```python
-from faster_whisper import WhisperModel
-model = WhisperModel("base", device="cpu", compute_type="int8")
-segments, info = model.transcribe(
-    voiceover_path,
-    language="hi",
-    word_timestamps=True
-)
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from whisperx_transcriber import transcribe
 ```
+
+The transcriber auto-detects CUDA (`float16`) or CPU (`int8`). Alignment failures downgrade
+gracefully to segment-level timestamps without aborting.
+
+### Error cases — all handled explicitly
+- `whisperx` not installed → `mark_error()` with pip install instructions
+- Voiceover file missing → `mark_error()`
+- Model not downloaded → `RuntimeError` from transcriber → `mark_error()` pointing to Models dashboard
+- Empty transcription output → `mark_error()`
 
 ### SRT generation
 ```python
-def to_srt_timestamp(seconds: float) -> str:
+def _fmt_srt_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    ms = int((seconds % 1) * 1000)
+    ms = int(round((seconds - int(seconds)) * 1000))
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-srt_lines = []
-for i, segment in enumerate(segments, 1):
-    srt_lines.append(str(i))
-    srt_lines.append(f"{to_srt_timestamp(segment.start)} --> {to_srt_timestamp(segment.end)}")
-    srt_lines.append(segment.text.strip())
-    srt_lines.append("")
-
-with open(srt_path, "w", encoding="utf-8") as f:
-    f.write("\n".join(srt_lines))
 ```
 
-### ASS generation (burn-in captions)
-ASS format allows styling. Use this template for Shorts:
-```
-[Script Info]
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, Bold, Alignment, MarginV
-Style: Default,Noto Sans Devanagari,72,&H00FFFFFF,1,2,120
-
-[Events]
-Format: Layer, Start, End, Style, Text
-```
-ASS timestamp format: `H:MM:SS.cc` (centiseconds, not milliseconds)
-
-### Segment-timestamp mapping
-After generating timestamps, match each Whisper segment back to the script segment it belongs to.
-Store as `whisper_word_timestamps` in the job — Stage 5 uses this to cut B-roll clips.
+### Stage 5 without Stage 4d
+Stage 5 checks `assets.ass_path` — if absent, it skips caption burn-in and uses
+`duration_hint_seconds` from `content.script_segments` for clip timing. The video renders
+normally; only the SRT upload to YouTube (Stage 6) and the caption burn-in are affected.
 
 ---
 
-## Stage 5 — Video Assembly (`stage_5_assembly.py`)
+## Stage 5 — Video Assembly (`stage_5_assembly.py`) ✅
 
-**Input:** All of `assets{}` — broll_video_paths, voiceover_path, srt_path, ass_path,
+**Input:** All of `assets{}` — broll_video_paths, voiceover_path, srt_path,
           thumbnail_paths, background_music_path, whisper_word_timestamps
 **Output:** `job["output"]["final_video_path"]`, `job["output"]["quality_checks"]`
 **Status:** `stage_5_complete`
 
+### Assembly engine: MoviePy 2.x
+Stage 5 uses **MoviePy 2.x** (not FFmpeg filter_complex). `pip install moviepy` is required;
+ffmpeg must be on PATH as MoviePy delegates encoding to it.
+
+**Key MoviePy v2 API used — never use v1 equivalents:**
+```python
+from moviepy import (
+    VideoFileClip, ImageClip, ColorClip,
+    AudioFileClip, concatenate_videoclips,
+    concatenate_audioclips, CompositeAudioClip,
+)
+clip.subclipped(t_start, t_end)  # not .subclip()
+clip.resized((w, h))             # not .resize()
+clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)  # not .crop()
+clip.with_audio(audio)           # not .set_audio()
+clip.with_fps(fps)               # not .set_fps()
+audio.with_volume_scaled(0.15)   # not .volumex()
+```
+
 ### What it does
-Assembles the final video using FFmpeg. Timeline per segment:
-- Use Whisper timestamps to know exactly how long each segment is
-- Layer the matching B-roll clip under the voiceover
-- Loop B-roll if the segment is longer than the clip
-- For the `finding` and `context` segments: use study screenshots instead of B-roll
-  if `study.screenshot_paths` is non-empty
-- Prepend 3-second medical disclaimer card (white text on black, from compliance config)
-- Add 2-second intro card from `assets/intro.mp4` (manually created once)
-- Add 5-second outro card from `assets/outro.mp4`
-- Burn in ASS captions
-- Mix voiceover at 100% with background music at 15% volume
+Timeline built in order:
+1. `[optional intro.mp4]` — scale-crop to target resolution
+2. 3-second disclaimer card — `ImageClip` from Pillow-generated PNG
+3. Per segment from `content.script_segments`:
+   - `context` / `finding` segments → study screenshot (`ImageClip`) if available
+   - All other segments → B-roll from `broll_video_paths` (looped if too short, scale-cropped)
+   - Missing clips → black frame (`ColorClip`)
+4. `[optional outro.mp4]` — scale-crop to target resolution
 
-### FFmpeg assembly approach
-Use `ffmpeg-python` wrapper. Prefer filter_complex over multiple passes.
+Audio chain:
+- Voiceover at 100%
+- Optional background music at 15% (`audio.with_volume_scaled(0.15)`)
+- Mixed with `CompositeAudioClip([voiceover, music])`
 
+ASS captions (if `assets.ass_path` exists from Stage 4d):
+- MoviePy cannot render ASS filters, so Stage 5 does a single FFmpeg post-pass:
+  ```python
+  run_ffmpeg(["ffmpeg", "-y", "-i", raw_path, "-vf", f"ass='{escaped}'", ..., output_path])
+  ```
+  The intermediate `video_raw.mp4` is deleted after burn-in.
+
+### Scale-crop helper
+All clips are resized with scale-to-fill + center-crop — no letterboxing, no stretching:
 ```python
-import ffmpeg
-
-def assemble_video(segments_with_broll, voiceover_path, music_path, ass_path, output_path):
-    # Build video stream from B-roll clips trimmed to segment durations
-    # This is complex — use subprocess with ffmpeg directly for filter_complex
-    import subprocess
-    
-    # Example concat filter:
-    filter_parts = []
-    inputs = []
-    for i, seg in enumerate(segments_with_broll):
-        inputs += ["-i", seg["broll_path"]]
-        filter_parts.append(f"[{i}:v]trim=duration={seg['duration']},setpts=PTS-STARTPTS[v{i}]")
-    
-    concat_inputs = "".join(f"[v{i}]" for i in range(len(segments_with_broll)))
-    filter_parts.append(f"{concat_inputs}concat=n={len(segments_with_broll)}:v=1:a=0[vout]")
-    
-    cmd = ["ffmpeg", "-y"]
-    cmd += inputs
-    cmd += ["-i", voiceover_path]
-    cmd += ["-i", music_path]
-    cmd += ["-filter_complex", ";".join(filter_parts)]
-    cmd += ["-vf", f"ass={ass_path}"]
-    # ... audio mix, output settings
-    subprocess.run(cmd, check=True)
+def _mp_scale_crop(clip, target_w, target_h):
+    import math
+    clip_w, clip_h = clip.size
+    scale = max(target_w / clip_w, target_h / clip_h)
+    new_w, new_h = math.ceil(clip_w * scale), math.ceil(clip_h * scale)
+    clip = clip.resized((new_w, new_h))
+    x1, y1 = (new_w - target_w) // 2, (new_h - target_h) // 2
+    return clip.cropped(x1=x1, y1=y1, x2=x1 + target_w, y2=y1 + target_h)
 ```
 
-### Disclaimer card
-Generate programmatically using FFmpeg drawtext or a pre-rendered PNG:
-```python
-disclaimer_text = niche_profile["compliance"]["medical_disclaimer"]["text_hindi"]
-# Use FFmpeg drawtext filter or create a black frame with white text using Pillow
-```
-
-### Quality gate
-Read thresholds from `niche_profile["quality_gate"]`:
-
+### Quality gate (unchanged from original — uses ffprobe/volumedetect)
 ```python
 quality_checks = {
-    "duration_in_range": False,
-    "disclaimer_present": False,
-    "audio_peak_ok": False,
-    "audio_avg_ok": False,
-    "all_passed": False
+    "duration_in_range": bool,      # from niche_profile.quality_gate
+    "disclaimer_present": True,     # always true (included in assembly)
+    "audio_peak_ok": bool,          # from volumedetect
+    "audio_avg_ok": bool,           # from volumedetect
+    "all_passed": bool,
 }
-
-# Duration check
-import subprocess, json
-probe = subprocess.run(
-    ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", output_path],
-    capture_output=True, text=True
-)
-duration = float(json.loads(probe.stdout)["format"]["duration"])
-target = niche_profile["script"]["target_duration_seconds"]
-tolerance = niche_profile["quality_gate"]["video_duration_tolerance_pct"] / 100
-quality_checks["duration_in_range"] = abs(duration - target) / target <= tolerance
-
-# Audio level check (use ffmpeg volumedetect)
-# Thresholds from niche_profile["quality_gate"]["audio_peak_dbfs_max"] etc.
-
-quality_checks["all_passed"] = all(v for k, v in quality_checks.items() if k != "all_passed")
 ```
+If `all_passed` is False: marks job error with failing check names. Video is preserved on disk for inspection.
 
-If `all_passed` is False: set `job["output"]["quality_checks"]`, mark error with specific failing check.
+### Pre-flight: accepted job statuses
+- `stage_4_complete` — normal flow
+- `stage_3_complete` — dev mode (manually placed assets, no stage 4 needed)
+- `error` with `error.stage == "stage_5"` — retry
 
 ---
 
-## Stage 6 — YouTube Upload (`stage_6_upload.py`)
+## Standalone modules (project root, not stage scripts)
+
+### `whisperx_transcriber.py`
+Pure transcription utility. Used by Stage 4d and independently.
+
+```python
+from whisperx_transcriber import transcribe, transcribe_to_file
+
+segments = transcribe("voiceover.wav", language="hi", model_size="large-v2")
+# Returns: [{"text": str, "start": float, "end": float, "words": [{"word", "start", "end"}]}]
+
+transcribe_to_file("voiceover.wav", "transcript.json", language="hi")
+```
+
+Requires: `pip install whisperx torch` + models downloaded via `model_manager.py`.
+On import failure or missing model: raises `ImportError` / `RuntimeError` with actionable message.
+
+### `edit_decision.py`
+Generates an Edit Decision List from a transcript + B-roll clip database.
+
+```python
+from edit_decision import extract_keywords, generate_edl, edl_to_json
+
+keywords = extract_keywords("रक्त शर्करा का स्तर बढ़ता है", max_terms=3)
+# Returns: ['शर्करा', 'बढ़ता', 'रक्त']  (longest non-stopword tokens)
+
+edl = generate_edl(segments, clip_db_path="cache/broll_cache.db")
+# Returns: [{"clip_id", "clip_path", "timeline_start", "timeline_end",
+#            "source_text", "search_terms"}]
+
+edl_to_json(edl, "edl.json")
+```
+
+Hindi stopword list is built-in (100+ tokens). Keyword extraction is entirely offline.
+Raises `FileNotFoundError` if the database does not exist yet (run Stage 4a first).
+
+### `video_assembler.py`
+Overlays B-roll from an EDL onto a base A-roll video using MoviePy.
+
+```python
+from video_assembler import assemble, preview_edl
+
+preview_edl("edl.json")   # prints time / clip / text table to terminal
+
+assemble(
+    base_video_path="footage.mp4",
+    edl_path="edl.json",
+    output_path="final.mp4",
+)
+```
+
+- B-roll fully replaces the video track at each window (no transparent overlay)
+- Base video audio is preserved throughout; B-roll audio is always stripped
+- Clips shorter than their window are looped; all clips are scale-cropped to match base resolution
+- Segments with `clip_path=null` or missing files show base video unchanged
+
+### `stages/model_manager.py`
+CLI called by the frontend `/api/models` routes. Not a stage script.
+
+```bash
+python stages/model_manager.py status          # → JSON of all models + download status
+python stages/model_manager.py download large-v2
+python stages/model_manager.py download align-hi
+```
+
+Known model IDs:
+| ID | Type | HF repo | Size |
+|---|---|---|---|
+| `large-v2` | transcription | `Systran/faster-whisper-large-v2` | 3.1 GB |
+| `large-v3` | transcription | `Systran/faster-whisper-large-v3` | 3.1 GB |
+| `medium` | transcription | `Systran/faster-whisper-medium` | 1.5 GB |
+| `small` | transcription | `Systran/faster-whisper-small` | 0.5 GB |
+| `align-hi` | alignment | `theainerd/Wav2Vec2-large-xlsr-hindi` | 1.2 GB |
+
+Download status is checked by looking for `~/.cache/huggingface/hub/models--{repo}/snapshots/`.
+
+---
+
+## Stage 6 — YouTube Upload (`stage_6_upload.py`) 🔲 TODO
 
 **Input:** `job["output"]["final_video_path"]`, `job["content"]`, `job["assets"]["thumbnail_paths"]`,
           `job["assets"]["srt_path"]`
@@ -329,7 +377,6 @@ If `all_passed` is False: set `job["output"]["quality_checks"]`, mark error with
 
 ### Auth setup (one-time manual step)
 ```bash
-# User must do this once:
 python -c "
 from google_auth_oauthlib.flow import InstalledAppFlow
 flow = InstalledAppFlow.from_client_secrets_file('credentials.json',
@@ -349,8 +396,6 @@ import pickle
 creds = pickle.load(open("token.pkl", "rb"))
 youtube = build("youtube", "v3", credentials=creds)
 
-publish_time = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
-
 body = {
     "snippet": {
         "title": job["content"]["title"],
@@ -361,9 +406,10 @@ body = {
         "defaultAudioLanguage": niche_profile["channel"]["language"],
     },
     "status": {
-        "privacyStatus": "private",   # change to "public" or use scheduledPublishAt
+        "privacyStatus": "private",
         "selfDeclaredMadeForKids": niche_profile["channel"]["made_for_kids"],
         "madeForKids": niche_profile["channel"]["made_for_kids"],
+        "containsSyntheticMedia": True,  # AI-generated content disclosure
     }
 }
 
@@ -386,8 +432,8 @@ for thumb in job["assets"]["thumbnail_paths"]:
         videoId=video_id,
         media_body=MediaFileUpload(thumb["path"])
     ).execute()
-    # YouTube only keeps the last thumbnail set — upload all 3 sequentially,
-    # final one will be the active thumbnail (use concept_abstract last as safest choice)
+    # YouTube keeps the last thumbnail set — upload all 3 sequentially;
+    # use concept_abstract last as it's the safest choice
 ```
 
 ### Upload SRT captions
@@ -406,19 +452,13 @@ youtube.captions().insert(
 ).execute()
 ```
 
-### AI-generated content disclosure
-Required by YouTube policy. Set in video snippet:
-```python
-body["snippet"]["madeForKids"] = False
-# For AI disclosure — use YouTube's self-declaration flag:
-body["status"]["containsSyntheticMedia"] = True  # if thumbnail or video is AI-generated
-```
-
 ### Schedule publish
 ```python
 # Schedule 20 hours out (gives YouTube time to process):
-publish_time = (datetime.now(timezone.utc) + timedelta(hours=20)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+from datetime import timedelta
+publish_time = (
+    datetime.now(timezone.utc) + timedelta(hours=20)
+).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 body["status"]["privacyStatus"] = "private"
 body["status"]["publishAt"] = publish_time
 ```
-

@@ -7,7 +7,7 @@ research, fully end-to-end: PubMed → script → assets → YouTube upload.
 
 A pipeline that takes a health research topic, finds a real peer-reviewed study on PubMed,
 extracts its claims with an LLM, generates a Hindi voiceover script + all YouTube metadata,
-downloads B-roll and generates thumbnails, assembles the video with FFmpeg, and uploads it.
+downloads B-roll and generates thumbnails, assembles the video with MoviePy, and uploads it.
 
 Target audience: Hindi-speaking adults (35-65) managing chronic conditions. Channel language: Hindi.
 
@@ -21,18 +21,23 @@ health_video_bot/
 ├── niche_profile.json               ← editorial DNA — every stage reads this
 ├── job_schema.json                  ← canonical job state shape
 ├── .env                             ← API keys (never commit)
-├── requirements.txt
+│
+├── broll_db.py                      ← SQLite clip registry (dedup, LRU, integrity)
+├── whisperx_transcriber.py          ← WhisperX transcription → word-level timestamps
+├── edit_decision.py                 ← transcript + clip DB → EDL JSON
+├── video_assembler.py               ← EDL + base video → final video (MoviePy)
 │
 ├── stages/
 │   ├── CLAUDE.md                    ← stage-specific context
+│   ├── model_manager.py             ← CLI: check/download WhisperX models
 │   ├── stage_1_research.py          ← DONE
 │   ├── stage_2_claim_extraction.py  ← DONE
 │   ├── stage_3_content_generation.py ← DONE
-│   ├── stage_4a_broll.py            ← TODO
-│   ├── stage_4b_thumbnail.py        ← TODO
-│   ├── stage_4c_voiceover.py        ← TODO
-│   ├── stage_4d_captions.py         ← TODO
-│   ├── stage_5_assembly.py          ← TODO
+│   ├── stage_4a_broll.py            ← DONE
+│   ├── stage_4b_thumbnail.py        ← DONE
+│   ├── stage_4c_voiceover.py        ← DONE
+│   ├── stage_4d_captions.py         ← DONE (WhisperX → SRT + word timestamps)
+│   ├── stage_5_assembly.py          ← DONE (MoviePy assembly + quality gate)
 │   └── stage_6_upload.py            ← TODO
 │
 ├── jobs/                            ← one JSON per job, never delete
@@ -41,12 +46,21 @@ health_video_bot/
 │   ├── {job_id}/broll/
 │   ├── {job_id}/thumbnails/
 │   ├── {job_id}/audio/
-│   ├── {job_id}/captions/
+│   ├── {job_id}/captions/           ← word_timestamps.json + captions.srt (from 4d)
 │   ├── {job_id}/output/
 │   └── music/                       ← shared background tracks (manual)
 ├── cache/
-│   └── broll/                       ← cached clips by search term
-└── logs/
+│   ├── broll/                       ← cached clips by search term
+│   └── broll_cache.db               ← SQLite clip registry
+└── frontend/                        ← Next.js dashboard
+    └── app/
+        ├── jobs/
+        ├── clips/
+        ├── models/                  ← WhisperX model download page
+        └── api/
+            ├── jobs/
+            ├── clips/
+            └── models/              ← model status + download SSE stream
 ```
 
 ---
@@ -81,13 +95,21 @@ created → stage_1_complete → stage_2_complete → stage_3_complete
 [Stage 4a] Pexels/Pixabay B-roll download → assets.broll_video_paths
 [Stage 4b] AI image generation → assets.thumbnail_paths
 [Stage 4c] Sarvam AI TTS → assets.voiceover_path
-[Stage 4d] Whisper → SRT + ASS captions → assets.srt_path, ass_path  ← SKIPPED FOR NOW
-[Stage 5]  FFmpeg assembly + quality gate → output.final_video_path
-[Stage 6]  YouTube Data API v3 upload → output.youtube_upload_id
+[Stage 4d] WhisperX → word_timestamps.json + SRT → assets.srt_path, whisper_word_timestamps
+[Stage 5]  MoviePy assembly + quality gate → output.final_video_path
+[Stage 6]  YouTube Data API v3 upload → output.youtube_upload_id  ← TODO
 ```
 
-Stages 4a–4c can run in parallel. Stage 4d is skipped for now — Stage 5 handles its
-absence gracefully (uses `duration_hint_seconds` for timing, skips ASS caption burn-in).
+Stages 4a–4d can run in parallel. Stage 4d requires whisperx + downloaded models;
+Stage 5 handles its absence gracefully (uses `duration_hint_seconds` for timing, skips
+ASS caption burn-in).
+
+### Standalone editing pipeline (independent of job flow)
+```
+audio file → whisperx_transcriber.py → transcript JSON (word-level)
+           → edit_decision.py        → EDL JSON (clip placements)
+           → video_assembler.py      → final video (B-roll over A-roll)
+```
 
 ---
 
@@ -194,6 +216,31 @@ if __name__ == "__main__":
         job_id = sys.argv[1]
 ```
 
+### MoviePy v2 patterns (Stage 5 and video_assembler.py)
+Always import lazily inside functions so the module can be imported even when moviepy is
+not installed — fail at call time with a clear error message.
+
+```python
+# Scale-to-fill + center-crop (used in Stage 5 and video_assembler.py)
+def _mp_scale_crop(clip, target_w, target_h):
+    import math
+    clip_w, clip_h = clip.size
+    scale = max(target_w / clip_w, target_h / clip_h)
+    new_w, new_h = math.ceil(clip_w * scale), math.ceil(clip_h * scale)
+    clip = clip.resized((new_w, new_h))
+    x1, y1 = (new_w - target_w) // 2, (new_h - target_h) // 2
+    return clip.cropped(x1=x1, y1=y1, x2=x1 + target_w, y2=y1 + target_h)
+
+# Key v2 API differences from v1:
+#   .subclipped()  not .subclip()
+#   .resized()     not .resize()
+#   .cropped()     not .crop()
+#   .with_audio()  not .set_audio()
+#   .with_fps()    not .set_fps()
+#   .with_volume_scaled()  not .volumex()
+#   VideoFileClip  not editor.VideoFileClip
+```
+
 ---
 
 ## What's already built
@@ -237,23 +284,58 @@ if __name__ == "__main__":
 - Concatenates WAVs with pydub, measures duration
 - Does NOT change job status
 
-### Stage 4d — `stages/stage_4d_captions.py` ⏭ SKIPPED
-- Would run Whisper to get word-level timestamps → SRT + ASS files
-- Stage 5 handles its absence: uses `duration_hint_seconds` for timing, skips ASS burn-in
+### Stage 4d — `stages/stage_4d_captions.py` ✅
+- Requires: whisperx + PyTorch installed, plus models downloaded via `model_manager.py`
+- Transcribes `assets.voiceover_path` with WhisperX (Hindi, large-v2 by default)
+- Forced alignment produces word-level timestamps
+- Saves `assets/{job_id}/captions/word_timestamps.json` and `captions.srt`
+- Writes `job["assets"]["whisper_word_timestamps"]` and `job["assets"]["srt_path"]`
+- If whisperx is not installed or model is not downloaded → marks job error with install instructions
+- Does NOT change job status
+- Stage 5 handles absence gracefully: skips caption burn-in, uses duration_hint_seconds for timing
 
 ### Stage 5 — `stages/stage_5_assembly.py` ✅
-- Assembles 1080×1920 portrait video for YouTube Shorts
-- Disclaimer card (3s) → B-roll/screenshots per segment → voiceover audio → optional music
+- Assembles video using **MoviePy 2.x** (replaced FFmpeg filter_complex pipeline)
+- Timeline: [optional intro] → 3s disclaimer card → B-roll/screenshots per segment → [optional outro]
+- Voiceover audio at 100%; optional background music mixed at 15% via CompositeAudioClip
+- Scale-to-fill + center-crop on all clips; loops B-roll shorter than its segment window
+- If `assets.ass_path` is set: single FFmpeg post-pass burns in ASS captions (MoviePy has no ASS filter)
 - Accepts `stage_4_complete` or `stage_3_complete` (dev mode with manually placed assets)
-- Quality gate: duration, audio levels via ffprobe/volumedetect
+- Quality gate: duration, audio levels via ffprobe/volumedetect — unchanged from before
 - Sets `status: stage_5_complete`
+
+### Standalone modules
+
+**`whisperx_transcriber.py`**
+- `transcribe(audio_path, language, model_size, device)` → list of segment dicts with word timestamps
+- `transcribe_to_file(audio_path, output_json_path, language)` → saves result to JSON
+- Auto-detects CUDA; uses float16 on GPU, int8 on CPU
+- Alignment failures degrade gracefully (returns segment-level timestamps without word detail)
+- Clear ImportError / RuntimeError if whisperx not installed or model not downloaded
+
+**`edit_decision.py`**
+- `extract_keywords(text, max_terms)` → offline Hindi noun extraction (split, stopwords, length sort)
+- `generate_edl(segments, clip_db_path)` → queries ClipDB.find_by_tags(), returns EDL list
+- `edl_to_json(edl, output_path)` → saves EDL to JSON
+
+**`video_assembler.py`**
+- `preview_edl(edl_path)` → prints time/clip/text summary to terminal
+- `assemble(base_video_path, edl_path, output_path)` → overlays B-roll on A-roll via MoviePy
+  - B-roll clips fully replace video track (not transparent overlay); base audio always kept
+  - Clips shorter than their window are looped; all clips are scale-cropped to base resolution
+  - codec="libx264", audio_codec="aac"
+
+**`stages/model_manager.py`**
+- `python stages/model_manager.py status` → JSON: all 5 known models + HuggingFace cache check
+- `python stages/model_manager.py download <id>` → streams download progress (SSE-friendly stdout)
+- Called by the frontend `/api/models` and `/api/models/download` routes
+- Known models: `large-v2`, `large-v3`, `medium`, `small` (transcription) + `align-hi` (Hindi alignment)
 
 ---
 
 ## What needs to be built next
 
 1. **Stage 6** — YouTube upload
-2. **Stage 4d** — Whisper captions (optional — Stage 5 works without it)
 
 ### Stage 6 — `stages/stage_6_upload.py` (TODO)
 See `stages/CLAUDE.md` for full spec.
@@ -267,7 +349,7 @@ All in `.env`, loaded by `python-dotenv` at the top of every stage:
 
 ```
 ANTHROPIC_API_KEY=       # for Claude (Stages 2, 3)
-OPENAI_API_KEY=          # for OpenAI LLM + DALL-E + Whisper (Stage 4d)
+OPENAI_API_KEY=          # for OpenAI LLM + DALL-E
 GROQ_API_KEY=            # free tier — recommended for dev/testing (console.groq.com)
 
 # LLM selection
@@ -282,7 +364,6 @@ PIXABAY_API_KEY=         # free at pixabay.com/api/docs
 SARVAM_API_KEY=          # for Hindi TTS
 
 IMAGE_GEN_PROVIDER=dalle # or: vertex
-OPENAI_API_KEY=          # for DALL-E
 GOOGLE_APPLICATION_CREDENTIALS=  # for Vertex AI Imagen
 
 NICHE_PROFILE_PATH=niche_profile.json
@@ -300,9 +381,25 @@ CACHE_DIR=cache
 python stages/stage_1_research.py
 python stages/stage_2_claim_extraction.py
 python stages/stage_3_content_generation.py
+python stages/stage_4a_broll.py
+python stages/stage_4b_thumbnail.py
+python stages/stage_4c_voiceover.py
+python stages/stage_4d_captions.py    # requires whisperx + downloaded models
+python stages/stage_5_assembly.py
 
 # Or specify job_id explicitly:
 python stages/stage_2_claim_extraction.py abc123-job-id
+
+# Standalone editing pipeline:
+python whisperx_transcriber.py voiceover.wav hi large-v2
+python edit_decision.py transcript.json edl.json
+python video_assembler.py --preview edl.json
+python video_assembler.py base.mp4 edl.json final.mp4
+
+# WhisperX model management:
+python stages/model_manager.py status
+python stages/model_manager.py download large-v2
+python stages/model_manager.py download align-hi
 ```
 
 ---
@@ -317,3 +414,4 @@ python stages/stage_2_claim_extraction.py abc123-job-id
 5. **The medical disclaimer must appear** in every video (Stage 5 adds it, Stage 6 includes it in description).
 6. **All LLM calls must have a max of 2 retry attempts**, then abort via `mark_error()`.
 7. **Never use `datetime.utcnow()`** — use `datetime.now(timezone.utc)` instead.
+8. **MoviePy 2.x API only** — never use v1 method names (subclip, resize, crop, set_audio, volumex).

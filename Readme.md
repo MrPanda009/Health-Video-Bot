@@ -1,6 +1,6 @@
 # Health Video Bot
 
-Automated Hindi health education video pipeline. Takes a PubMed health research topic, extracts claims from a real peer-reviewed study, generates a voiceover script, downloads B-roll, assembles a full-HD video, and is ready for YouTube upload. Target: Hindi-speaking adults (35–65) managing chronic conditions.
+Automated Hindi health education video pipeline. Takes a PubMed health research topic, extracts claims from a real peer-reviewed study, generates a voiceover script, downloads B-roll, assembles a full-HD video, and uploads it to YouTube. Target: Hindi-speaking adults (35–65) managing chronic conditions.
 
 ---
 
@@ -15,21 +15,25 @@ Automated Hindi health education video pipeline. Takes a PubMed health research 
 | 4a | `stages/stage_4a_broll.py` | ✅ | Pexels/Pixabay B-roll download with SQLite clip library |
 | 4b | `stages/stage_4b_thumbnail.py` | ✅ | AI thumbnail generation (DALL-E 3 or Vertex Imagen) |
 | 4c | `stages/stage_4c_voiceover.py` | ✅ | Sarvam AI Hindi TTS, chunk-splitting, WAV concatenation |
-| 4d | `stages/stage_4d_captions.py` | ⏭ Skipped | Whisper SRT/ASS (Stage 5 handles its absence gracefully) |
-| 5 | `stages/stage_5_assembly.py` | ✅ | FFmpeg assembly + quality gate |
+| 4d | `stages/stage_4d_captions.py` | ✅ | WhisperX transcription → SRT captions + word timestamps |
+| 5 | `stages/stage_5_assembly.py` | ✅ | MoviePy assembly + quality gate |
 | 6 | `stages/stage_6_upload.py` | 🔲 TODO | YouTube Data API v3 upload |
 
-**Supporting modules:**
+**Supporting modules (project root):**
 - `broll_db.py` — SQLite clip registry (dedup, LRU reuse, integrity checking)
+- `whisperx_transcriber.py` — WhisperX-based audio transcription returning word-level timestamps
+- `edit_decision.py` — Generates an EDL JSON from a transcript and the B-roll clip database
+- `video_assembler.py` — Overlays B-roll from an EDL onto a base A-roll video using MoviePy
 - `niche_profile.json` — all editorial config; never hardcode values from it in stage scripts
 - `job_schema.json` — canonical shape of a job state object
 
 **Frontend dashboard (`frontend/`):**
-- Next.js 16 + React 19 + Tailwind CSS 4
+- Next.js + React + Tailwind CSS
 - Jobs list with live status polling
 - Per-job pipeline timeline — run any stage and stream its stdout in real time
 - Job data explorer (study, claims, script, assets, output)
 - Clip Library page — browse, filter by status, and verify the B-roll SQLite database
+- **Models page** — check which WhisperX models are downloaded, download missing ones with live progress streaming
 - New Job dialog — choose topic, optional PMID, and output format (9:16 Shorts / 16:9 Landscape)
 
 ---
@@ -50,29 +54,38 @@ Both formats are full HD. The format is chosen at job creation and stored in `jo
 ```
 health_video_bot/
 │
-├── broll_db.py              # SQLite clip registry
-├── niche_profile.json       # Editorial DNA — all stages read this
-├── job_schema.json          # Canonical job state schema
+├── broll_db.py                 # SQLite clip registry
+├── whisperx_transcriber.py     # WhisperX transcription with word-level timestamps
+├── edit_decision.py            # EDL generator: transcript → clip placements
+├── video_assembler.py          # MoviePy assembler: base video + EDL → final video
+├── niche_profile.json          # Editorial DNA — all stages read this
+├── job_schema.json             # Canonical job state schema
 │
 ├── stages/
-│   ├── stage_0_clean.py     # Interactive job & asset cleanup
+│   ├── model_manager.py        # CLI: check/download WhisperX models (called by frontend)
+│   ├── stage_0_clean.py        # Interactive job & asset cleanup
 │   ├── stage_1_research.py
 │   ├── stage_2_claim_extraction.py
 │   ├── stage_3_content_generation.py
 │   ├── stage_4a_broll.py
 │   ├── stage_4b_thumbnail.py
 │   ├── stage_4c_voiceover.py
-│   └── stage_5_assembly.py
+│   ├── stage_4d_captions.py    # WhisperX → SRT + word timestamps
+│   └── stage_5_assembly.py     # MoviePy assembly + quality gate
 │
-├── frontend/                # Next.js dashboard
+├── frontend/                   # Next.js dashboard
 │   ├── app/
-│   │   ├── jobs/            # Job list + per-job detail pages
-│   │   ├── clips/           # Clip library page
-│   │   └── api/             # jobs, clips, assets, stage-runner routes
+│   │   ├── jobs/               # Job list + per-job detail pages
+│   │   ├── clips/              # Clip library page
+│   │   ├── models/             # WhisperX model download page
+│   │   └── api/
+│   │       ├── jobs/           # Job CRUD + stage runner + SSE log streaming
+│   │       ├── clips/          # Clip library + integrity verify
+│   │       └── models/         # Model status check + download SSE stream
 │   ├── components/
 │   └── hooks/
 │
-├── jobs/                    # One JSON per job — never delete
+├── jobs/                       # One JSON per job — never delete
 │
 ├── assets/
 │   ├── {job_id}/
@@ -80,15 +93,15 @@ health_video_bot/
 │   │   ├── broll/
 │   │   ├── thumbnails/
 │   │   ├── audio/
-│   │   ├── captions/
+│   │   ├── captions/           # word_timestamps.json + captions.srt
 │   │   └── output/
-│   ├── intro.mp4            # Optional — prepended to every video
-│   ├── outro.mp4            # Optional — appended to every video
-│   └── music/               # Shared background tracks (manual)
+│   ├── intro.mp4               # Optional — prepended to every video
+│   ├── outro.mp4               # Optional — appended to every video
+│   └── music/                  # Shared background tracks (manual)
 │
 └── cache/
-    ├── broll/               # Cached clips by search-term slug
-    └── broll_cache.db       # SQLite clip registry (managed by broll_db.py)
+    ├── broll/                  # Cached clips by search-term slug
+    └── broll_cache.db          # SQLite clip registry (managed by broll_db.py)
 ```
 
 ---
@@ -99,12 +112,23 @@ health_video_bot/
 [Stage 1]  PubMed search → PDF/screenshots → study{}
 [Stage 2]  LLM claim extraction + safety flags → claims{}
 [Stage 3]  Master LLM call → hindi_script + metadata + prompts → content{}
-               ↓                    ↓                   ↓
-[Stage 4a] B-roll download   [Stage 4b] Thumbnails  [Stage 4c] TTS voiceover
-               └──────────────────────┴───────────────────┘
+               ↓                    ↓                   ↓              ↓
+[Stage 4a] B-roll download   [Stage 4b] Thumbnails  [Stage 4c] TTS   [Stage 4d] Captions
+               └──────────────────────┴───────────────────┴──────────────┘
                               → assets{}  (status → stage_4_complete)
-[Stage 5]  FFmpeg assembly + quality gate → output/video.mp4
+[Stage 5]  MoviePy assembly + quality gate → output/video.mp4
 [Stage 6]  YouTube upload (TODO)
+```
+
+**Standalone editing pipeline** (independent of the job flow — used when you have A-roll footage):
+```
+audio file
+    ↓  whisperx_transcriber.py
+transcript JSON (word-level timestamps)
+    ↓  edit_decision.py
+EDL JSON (clip placements)
+    ↓  video_assembler.py
+final video (B-roll overlaid on A-roll, base audio preserved)
 ```
 
 ### Job status progression
@@ -126,14 +150,23 @@ Every stage reads `jobs/{job_id}.json`, does its work, writes its output block b
 uv venv
 source .venv/bin/activate
 uv pip install biopython playwright requests openai anthropic \
-               pydub pillow python-dotenv
+               pydub pillow python-dotenv moviepy
 playwright install chromium
 ```
 
-FFmpeg must be installed at the system level:
+FFmpeg must be installed at the system level (required by MoviePy and the quality gate):
 ```bash
 brew install ffmpeg        # macOS
 sudo apt install ffmpeg    # Ubuntu/Debian
+```
+
+**For Stage 4d (WhisperX captions)** — install separately after PyTorch:
+```bash
+pip install torch
+pip install whisperx
+# Then download models from the dashboard at /models, or via CLI:
+python stages/model_manager.py download large-v2
+python stages/model_manager.py download align-hi
 ```
 
 ### 2. Frontend
@@ -183,7 +216,7 @@ ASSETS_DIR=assets
 CACHE_DIR=cache
 ```
 
-**Dev shortcut:** Groq is free and fast enough for stages 2 & 3. Get a key at [console.groq.com](https://console.groq.com).
+**Dev shortcut:** Groq is free and fast enough for Stages 2 & 3. Get a key at [console.groq.com](https://console.groq.com).
 
 ### 4. One-time manual setup
 
@@ -191,6 +224,7 @@ CACHE_DIR=cache
 - [ ] Test Sarvam AI voices and set `audio.sarvam_voice_id` in `niche_profile.json`
 - [ ] Download 5–8 royalty-free background tracks → `assets/music/`
 - [ ] Optionally create `assets/intro.mp4` (≤3 s) and `assets/outro.mp4` (≤5 s)
+- [ ] Download WhisperX models (Stage 4d): open the dashboard `/models` page and click Download
 
 ---
 
@@ -206,6 +240,7 @@ CACHE_DIR=cache
 .venv/bin/python3 stages/stage_4a_broll.py
 .venv/bin/python3 stages/stage_4b_thumbnail.py
 .venv/bin/python3 stages/stage_4c_voiceover.py
+.venv/bin/python3 stages/stage_4d_captions.py   # requires whisperx + downloaded models
 .venv/bin/python3 stages/stage_5_assembly.py
 
 # Pass a job_id explicitly
@@ -219,13 +254,59 @@ CACHE_DIR=cache
 .venv/bin/python3 stages/stage_0_clean.py
 ```
 
+### Standalone editing pipeline
+
+```bash
+# Transcribe audio → word-level timestamps JSON
+.venv/bin/python3 whisperx_transcriber.py voiceover.wav hi large-v2
+
+# Generate EDL from transcript + B-roll DB
+.venv/bin/python3 edit_decision.py transcript.json edl.json
+
+# Preview the edit plan before rendering
+.venv/bin/python3 video_assembler.py --preview edl.json
+
+# Render final video (B-roll overlaid on A-roll)
+.venv/bin/python3 video_assembler.py base_footage.mp4 edl.json final.mp4
+```
+
+### WhisperX model management
+
+```bash
+# Check which models are downloaded
+.venv/bin/python3 stages/model_manager.py status
+
+# Download a specific model
+.venv/bin/python3 stages/model_manager.py download large-v2
+.venv/bin/python3 stages/model_manager.py download align-hi
+```
+
 ### Dashboard
 
 ```bash
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Click **New Job**, choose an output format, enter a topic or PMID, then use the Pipeline Timeline to run each stage with live log streaming.
+Open [http://localhost:3000](http://localhost:3000). Use the navigation to:
+- **Jobs** — create jobs, run pipeline stages, stream logs live
+- **Clips** — browse the B-roll library, verify file integrity
+- **Models** — check WhisperX model download status, download missing models
+
+---
+
+## WhisperX Models
+
+Stage 4d and the standalone `whisperx_transcriber.py` require two model downloads (stored in `~/.cache/huggingface/hub/`):
+
+| Model ID | Type | Size | Use |
+|---|---|---|---|
+| `large-v2` | Transcription | ~3.1 GB | Recommended for production |
+| `large-v3` | Transcription | ~3.1 GB | Latest large model |
+| `medium` | Transcription | ~1.5 GB | Faster, slightly less accurate |
+| `small` | Transcription | ~0.5 GB | Dev/testing |
+| `align-hi` | Alignment | ~1.2 GB | Word-level timestamps in Hindi |
+
+If a model isn't downloaded, Stage 4d prints a clear error message pointing to the Models dashboard. Stage 5 handles the absence of Stage 4d output gracefully (no captions, timing from `duration_hint_seconds`).
 
 ---
 
@@ -247,7 +328,7 @@ Stage 4a maintains a SQLite database of every downloaded clip. Before hitting th
 .venv/bin/python3 broll_db.py demo
 ```
 
-The `/clips` page in the dashboard provides the same functionality with a visual interface: stat cards, per-status filter tabs, expandable clip rows showing source URL and full filepath, and a **Verify Integrity** button.
+The `/clips` page in the dashboard provides the same functionality visually: stat cards, filter tabs, expandable clip rows, and a **Verify Integrity** button.
 
 ---
 

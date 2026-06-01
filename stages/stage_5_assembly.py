@@ -31,6 +31,7 @@ Exit status: stage_5_complete or error
 """
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -204,47 +205,90 @@ def generate_disclaimer_png(profile: dict, output_path: Path,
     img.save(str(output_path), "PNG")
 
 
-# ─── Assembly ─────────────────────────────────────────────────────────────────
+# ─── Assembly (MoviePy) ───────────────────────────────────────────────────────
 
-def _scale_filter(stream_label: str, out_label: str, video_w: int, video_h: int,
-                  duration_s: float | None = None) -> str:
+def _mp_scale_crop(clip, target_w: int, target_h: int):
     """
-    Build filter_complex fragment: scale source to fill video_w×video_h (center-crop),
-    normalise fps and SAR. Optionally trim to duration_s (for looped video inputs).
-    Works for both portrait (9:16) and landscape (16:9) targets.
+    Resize *clip* to fill target_w × target_h (scale-to-fill), then center-crop.
+
+    Preserves the clip's aspect ratio — no stretching.  Works for both portrait
+    (9:16) and landscape (16:9) target dimensions.
     """
-    parts = []
-    if duration_s is not None:
-        parts.append(f"trim=duration={duration_s:.3f},setpts=PTS-STARTPTS")
-    parts += [
-        f"scale=w={video_w}:h={video_h}:force_original_aspect_ratio=increase",
-        f"crop={video_w}:{video_h}",
-        f"fps=fps={FPS}",
-        "setsar=1",
-    ]
-    return f"[{stream_label}]" + ",".join(parts) + f"[{out_label}]"
+    clip_w, clip_h = clip.size
+    scale = max(target_w / clip_w, target_h / clip_h)
+    new_w = math.ceil(clip_w * scale)
+    new_h = math.ceil(clip_h * scale)
+    clip = clip.resized((new_w, new_h))
+    x1 = (new_w - target_w) // 2
+    y1 = (new_h - target_h) // 2
+    return clip.cropped(x1=x1, y1=y1, x2=x1 + target_w, y2=y1 + target_h)
+
+
+def _mp_loop(clip, duration: float):
+    """
+    Tile *clip* to cover *duration* seconds, then trim to exactly *duration*.
+
+    If the clip is already long enough it is simply trimmed without copying.
+    """
+    from moviepy import concatenate_videoclips
+
+    if clip.duration >= duration - 0.01:
+        return clip.subclipped(0, duration)
+    n = math.ceil(duration / clip.duration)
+    return concatenate_videoclips([clip] * n).subclipped(0, duration)
 
 
 def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     """
-    Build and run the FFmpeg command that produces the final video.
-    Dimensions are derived from job["aspect_ratio"]: 9:16 → 1080×1920, 16:9 → 1920×1080.
-    Returns the path to the output file.
+    Assemble the final video using MoviePy.
+
+    Timeline:
+      [intro.mp4 if present]  →  3s disclaimer  →  per-segment B-roll/screenshots
+      →  [outro.mp4 if present]
+    Audio: voiceover at 100 % mixed with optional background music at 15 %.
+    ASS captions (if present from Stage 4d) are burned in via a single FFmpeg
+    post-pass so Stage 5 does not depend on MoviePy for that filter.
+
+    Dimensions from job["aspect_ratio"]: "9:16" → 1080×1920, "16:9" → 1920×1080.
+
+    Args:
+        job:     Full job dict.
+        profile: Loaded niche_profile dict.
+        out_dir: Directory to write output files into.
+
+    Returns:
+        Path to the finished video file (assets/{job_id}/output/video.mp4).
+
+    Raises:
+        ImportError:      If moviepy is not installed.
+        FileNotFoundError: If the voiceover file is missing.
+        RuntimeError:     If MoviePy or FFmpeg (caption pass) fails.
     """
+    try:
+        from moviepy import (
+            AudioFileClip,
+            ColorClip,
+            CompositeAudioClip,
+            ImageClip,
+            VideoFileClip,
+            concatenate_audioclips,
+            concatenate_videoclips,
+        )
+    except ImportError:
+        raise ImportError(
+            "moviepy is not installed — cannot run Stage 5.\n"
+            "Install it with: pip install moviepy\n"
+            "ffmpeg must also be available in your PATH."
+        )
+
     video_w, video_h = _video_dims(job)
-    assets   = job.get("assets") or {}
-    job_id   = job["job_id"]
-    tmp_dir  = out_dir  # put intermediates alongside output
+    assets  = job.get("assets") or {}
+    job_id  = job["job_id"]
 
     ar_label = job.get("aspect_ratio", "9:16")
     print(f"[Stage 5] Aspect ratio: {ar_label} → {video_w}×{video_h}")
 
-    # ── Disclaimer PNG ───────────────────────────────────────────────────────
-    disclaimer_png = tmp_dir / "disclaimer.png"
-    print("[Stage 5] Generating disclaimer card...")
-    generate_disclaimer_png(profile, disclaimer_png, video_w, video_h)
-
-    # ── Asset paths ──────────────────────────────────────────────────────────
+    # ── Voiceover (required) ──────────────────────────────────────────────────
     voiceover_path = assets.get("voiceover_path")
     if not voiceover_path or not Path(voiceover_path).exists():
         raise FileNotFoundError(
@@ -253,51 +297,32 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             f"assets/{job_id}/audio/voiceover.wav and set assets.voiceover_path in the job."
         )
 
-    music_path  = assets.get("background_music_path")
-    has_music   = bool(music_path and Path(music_path).exists())
-
-    ass_path    = assets.get("ass_path")
+    music_path   = assets.get("background_music_path")
+    has_music    = bool(music_path and Path(music_path).exists())
+    ass_path     = assets.get("ass_path")
     has_captions = bool(ass_path and Path(ass_path).exists())
 
-    # ── B-roll + screenshot map ───────────────────────────────────────────────
+    # ── Disclaimer card (3 s static image) ───────────────────────────────────
+    out_dir.mkdir(parents=True, exist_ok=True)
+    disclaimer_png = out_dir / "disclaimer.png"
+    print("[Stage 5] Generating disclaimer card…")
+    generate_disclaimer_png(profile, disclaimer_png, video_w, video_h)
+    disclaimer_clip = (
+        ImageClip(str(disclaimer_png), duration=DISCLAIMER_DURATION).with_fps(FPS)
+    )
+
+    # ── Per-segment video clips ───────────────────────────────────────────────
     broll_map: dict[str, list[str]] = {
         b["segment_name"]: b["paths"]
         for b in assets.get("broll_video_paths", [])
     }
-    screenshot_paths = job.get("study", {}).get("screenshot_paths", [])
-    # Segments that should use screenshots if available (per spec)
-    SCREENSHOT_SEGS = {"context", "finding"}
+    screenshot_paths = (job.get("study") or {}).get("screenshot_paths", [])
+    SCREENSHOT_SEGS  = {"context", "finding"}
 
-    # ── Build FFmpeg inputs + filter_complex ──────────────────────────────────
-    cmd           = ["ffmpeg", "-y"]
-    filter_parts  = []
-    clip_labels   = []  # ordered list of filter output labels for the concat
-    input_idx     = 0
-
-    # ── Input 0: disclaimer PNG (looped 3 seconds) ───────────────────────────
-    cmd += ["-loop", "1", "-r", str(FPS), "-t", str(DISCLAIMER_DURATION),
-            "-i", str(disclaimer_png)]
-    filter_parts.append(
-        f"[{input_idx}:v]scale={video_w}:{video_h},fps=fps={FPS},setsar=1[disc]"
-    )
-    clip_labels.append("disc")
-    input_idx += 1
-
-    # ── Optional: intro card ─────────────────────────────────────────────────
-    intro_path = Path(ASSETS_DIR) / "intro.mp4"
-    if intro_path.exists():
-        cmd += ["-i", str(intro_path)]
-        filter_parts.append(_scale_filter(str(input_idx), "intro", video_w, video_h))
-        clip_labels.insert(0, "intro")
-        input_idx += 1
-        print("[Stage 5]   Found intro.mp4 — prepending")
-
-    # ── Inputs 1..N: per-segment clips ───────────────────────────────────────
-    segments = job["content"]["script_segments"]
-    for seg in segments:
+    segment_clips: list = []
+    for seg in job["content"]["script_segments"]:
         name     = seg["name"]
         duration = float(seg["duration_hint_seconds"])
-        label    = f"s{input_idx}"
 
         use_screenshot = (
             name in SCREENSHOT_SEGS
@@ -306,103 +331,110 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         )
 
         if use_screenshot:
-            ss_path = screenshot_paths[0]
-            cmd += ["-loop", "1", "-r", str(FPS), "-t", f"{duration:.3f}",
-                    "-i", str(ss_path)]
-            filter_parts.append(_scale_filter(str(input_idx), label, video_w, video_h))
+            clip = (
+                ImageClip(str(screenshot_paths[0]), duration=duration)
+                .with_fps(FPS)
+            )
+            clip = _mp_scale_crop(clip, video_w, video_h)
             print(f"[Stage 5]   {name}: screenshot ({duration}s)")
         else:
             clip_paths = broll_map.get(name, [])
             if clip_paths and Path(clip_paths[0]).exists():
-                cmd += ["-stream_loop", "-1", "-i", clip_paths[0]]
-                filter_parts.append(_scale_filter(str(input_idx), label, video_w, video_h,
-                                                  duration_s=duration))
+                raw = VideoFileClip(str(clip_paths[0])).without_audio()
+                raw = _mp_scale_crop(raw, video_w, video_h)
+                clip = _mp_loop(raw, duration)
                 print(f"[Stage 5]   {name}: b-roll ({duration}s)")
             else:
-                # Fallback: black frame
-                cmd += ["-f", "lavfi", "-r", str(FPS),
-                        "-i", f"color=c=black:s={video_w}x{video_h}:r={FPS}:d={duration:.3f}"]
-                filter_parts.append(f"[{input_idx}:v]fps=fps={FPS},setsar=1[{label}]")
-                print(f"[Stage 5]   {name}: ⚠ no clip — using black frame ({duration}s)")
+                clip = ColorClip(
+                    size=(video_w, video_h), color=(0, 0, 0), duration=duration
+                ).with_fps(FPS)
+                print(f"[Stage 5]   {name}: ⚠ no clip — black frame ({duration}s)")
 
-        clip_labels.append(label)
-        input_idx += 1
+        segment_clips.append(clip)
 
-    # ── Optional: outro card ─────────────────────────────────────────────────
+    # ── Optional intro / outro cards ──────────────────────────────────────────
+    intro_path = Path(ASSETS_DIR) / "intro.mp4"
     outro_path = Path(ASSETS_DIR) / "outro.mp4"
+
+    video_parts: list = []
+    if intro_path.exists():
+        intro = VideoFileClip(str(intro_path)).without_audio()
+        video_parts.append(_mp_scale_crop(intro, video_w, video_h))
+        print("[Stage 5]   Found intro.mp4 — prepending")
+
+    video_parts.append(disclaimer_clip)
+    video_parts.extend(segment_clips)
+
     if outro_path.exists():
-        cmd += ["-i", str(outro_path)]
-        filter_parts.append(_scale_filter(str(input_idx), "outro", video_w, video_h))
-        clip_labels.append("outro")
-        input_idx += 1
+        outro = VideoFileClip(str(outro_path)).without_audio()
+        video_parts.append(_mp_scale_crop(outro, video_w, video_h))
         print("[Stage 5]   Found outro.mp4 — appending")
 
-    # ── Audio inputs ─────────────────────────────────────────────────────────
-    voice_idx = input_idx
-    cmd += ["-i", str(voiceover_path)]
-    input_idx += 1
-
-    music_idx = None
-    if has_music:
-        music_idx = input_idx
-        cmd += ["-stream_loop", "-1", "-i", str(music_path)]
-        input_idx += 1
-        print(f"[Stage 5]   Background music: {Path(music_path).name}")
-
-    # ── Concat video ─────────────────────────────────────────────────────────
-    n_clips       = len(clip_labels)
-    concat_inputs = "".join(f"[{lbl}]" for lbl in clip_labels)
-    filter_parts.append(
-        f"{concat_inputs}concat=n={n_clips}:v=1:a=0[vconcat]"
-    )
+    # ── Concatenate video track ───────────────────────────────────────────────
+    print(f"\n[Stage 5] Concatenating {len(video_parts)} clip(s)…")
+    video_track   = concatenate_videoclips(video_parts)
+    total_duration = video_track.duration
 
     # ── Audio chain ───────────────────────────────────────────────────────────
-    if music_idx is not None:
-        filter_parts.append(f"[{voice_idx}:a]apad[voice_padded]")
-        filter_parts.append(f"[{music_idx}:a]volume=0.15[music_vol]")
-        filter_parts.append(
-            "[voice_padded][music_vol]"
-            "amix=inputs=2:duration=first:dropout_transition=0[aout]"
-        )
-        audio_map = "[aout]"
+    voiceover = AudioFileClip(str(voiceover_path))
+
+    if has_music:
+        music = AudioFileClip(str(music_path))
+        if music.duration < total_duration:
+            n = math.ceil(total_duration / music.duration)
+            music = concatenate_audioclips([music] * n)
+        music = music.subclipped(0, total_duration).with_volume_scaled(0.15)
+        audio_out = CompositeAudioClip([voiceover, music])
+        print(f"[Stage 5]   Background music: {Path(music_path).name} @ 15 %")
     else:
-        audio_map = f"{voice_idx}:a"
+        audio_out = voiceover
 
-    # ── ASS caption burn-in ───────────────────────────────────────────────────
-    if has_captions:
-        escaped = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
-        filter_parts.append(f"[vconcat]ass='{escaped}'[vfinal]")
-        video_map = "[vfinal]"
-        print(f"[Stage 5]   Burning captions from {ass_path}")
-    else:
-        video_map = "[vconcat]"
-        if not ass_path:
-            print("[Stage 5]   No ass_path in assets — captions skipped (stage 4d not run)")
+    final = video_track.with_audio(audio_out)
 
-    # ── Final command ─────────────────────────────────────────────────────────
-    output_path = out_dir / "video.mp4"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # ── Render ────────────────────────────────────────────────────────────────
+    # If captions need burn-in we write an intermediate first, then do one
+    # FFmpeg pass for the ASS filter.  Otherwise the MoviePy output IS the final.
+    render_path = out_dir / ("video_raw.mp4" if has_captions else "video.mp4")
 
-    cmd += ["-filter_complex", ";".join(filter_parts)]
-    cmd += ["-map", video_map]
-    if isinstance(audio_map, str) and audio_map.startswith("["):
-        cmd += ["-map", audio_map]
-    else:
-        cmd += ["-map", audio_map]
-    cmd += [
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-shortest",
-        str(output_path),
-    ]
+    print(f"\n[Stage 5] Rendering with MoviePy "
+          f"({video_w}×{video_h}, {total_duration:.1f}s)…")
+    final.write_videofile(
+        str(render_path),
+        fps=FPS,
+        codec="libx264",
+        audio_codec="aac",
+        audio_bitrate="128k",
+        preset="fast",
+        logger="bar",
+        ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+    )
 
-    print(f"\n[Stage 5] Running FFmpeg ({n_clips} clips)...")
-    print(f"[Stage 5] Command preview: ffmpeg {' '.join(cmd[1:5])} ... [{len(cmd)} args total]")
-    run_ffmpeg(cmd)
-
-    # Clean up disclaimer PNG (intermediate)
+    # ── Release MoviePy file handles ──────────────────────────────────────────
     disclaimer_png.unlink(missing_ok=True)
+    for clip in video_parts:
+        try:
+            clip.close()
+        except Exception:
+            pass
+
+    # ── Optional ASS caption burn-in (single FFmpeg pass) ────────────────────
+    if has_captions:
+        output_path = out_dir / "video.mp4"
+        escaped = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+        print(f"\n[Stage 5] Burning ASS captions from {ass_path}…")
+        run_ffmpeg([
+            "ffmpeg", "-y",
+            "-i", str(render_path),
+            "-vf", f"ass='{escaped}'",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-c:a", "copy",
+            str(output_path),
+        ])
+        render_path.unlink(missing_ok=True)
+    else:
+        output_path = render_path
+        if not ass_path:
+            print("[Stage 5]   No ass_path — captions skipped (stage 4d not run)")
 
     return output_path
 
