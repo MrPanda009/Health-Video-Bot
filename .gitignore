@@ -3,3 +3,5 @@
 /assets
 /jobs
 /cache
+/stages/__pycache__
+/__pycache__
