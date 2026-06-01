@@ -230,8 +230,16 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
     disclaimer_english = profile["compliance"]["medical_disclaimer"]["text_english"]
     ai_disclosure      = profile["compliance"]["ai_disclosure"]["description_text"]
 
+    script_language_instruction = profile["script"].get(
+        "script_language_instruction", ""
+    )
+
     # Build the prompt
     return f"""You are an expert Hindi health science communicator. Generate a complete YouTube Shorts video package based on the research below.
+
+⚠ CRITICAL LANGUAGE REQUIREMENT ⚠
+{script_language_instruction}
+This is non-negotiable. Producing Hinglish (Hindi written in Roman letters) will be treated as a failed output.
 
 ═══════════════════════════════════════════════
 STUDY FACTS (from peer-reviewed research)
@@ -271,6 +279,7 @@ FORMAT REQUIREMENTS
 Format: YouTube Shorts (vertical, under 60 seconds)
 Target script duration: {profile['script']['target_duration_seconds']} seconds
 Approximate word count (Hindi): {profile['script']['target_word_count_hindi']} words
+Script language: Devanagari script only — no Roman transliteration of Hindi words
 
 Required segments (produce ALL of them):
 {segment_instructions}
@@ -467,6 +476,15 @@ def validate_content(content: ContentBlock, claims: dict, profile: dict) -> list
     caveat_segs = [s for s in content.script_segments if s.name == "caveat"]
     if not caveat_segs or len(caveat_segs[0].hindi_text.strip()) < 20:
         notes.append("Caveat segment is missing or too short — required for health content")
+
+    # Check that script is in Devanagari, not Hinglish
+    devanagari_chars = sum(1 for c in content.hindi_script if 'ऀ' <= c <= 'ॿ')
+    total_letters = sum(1 for c in content.hindi_script if c.isalpha())
+    if total_letters > 0 and devanagari_chars / total_letters < 0.5:
+        notes.append(
+            "Script appears to be in Hinglish (Roman script) — regenerate with Devanagari only. "
+            f"Devanagari ratio: {devanagari_chars}/{total_letters} characters."
+        )
 
     # Check title length
     if len(content.title) > 60:

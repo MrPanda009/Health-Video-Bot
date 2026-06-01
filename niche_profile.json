@@ -79,13 +79,16 @@
                 ]
             }
         ],
+        "script_language": "devanagari",
+        "script_language_instruction": "The entire voiceover script (hindi_script and every hindi_text field) MUST be written exclusively in Devanagari script. Do NOT use Roman/Latin transliteration of Hindi words (no Hinglish such as 'aapko', 'kya', 'shodh'). Every Hindi word must appear in Devanagari characters (e.g. आपको, क्या, शोध). English medical terms that have no standard Hindi equivalent may remain in Roman script.",
         "absolute_prohibitions": [
             "Never use causal language ('causes', 'cures', 'prevents') for observational studies",
             "Never recommend stopping or modifying prescribed medications",
             "Never make absolute health claims without qualifying with 'shodh ke anusaar' or 'adhyayan mein paaya gaya'",
             "Never reference a study without mentioning sample size somewhere in the script",
             "Never open with 'Namaste doston, aaj ki video mein' or similar generic openers",
-            "Never end with 'Toh yeh thi aaj ki jaankari' or similar filler closings"
+            "Never end with 'Toh yeh thi aaj ki jaankari' or similar filler closings",
+            "Never write Hindi words in Roman/Latin script — all Hindi must be in Devanagari characters only (no Hinglish)"
         ]
     },
     "visuals": {
