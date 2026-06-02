@@ -74,6 +74,17 @@ _FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
 ]
 
+_DEVANAGARI_FONT_CANDIDATES = [
+    "/System/Library/Fonts/Supplemental/NotoSansDevanagari-Regular.ttf",
+    "/System/Library/Fonts/Supplemental/NotoSansDevanagari.ttf",
+    "/System/Library/Fonts/NotoSansDevanagari-Regular.ttf",
+    "/Library/Fonts/NotoSansDevanagari-Regular.ttf",
+    "/System/Library/Fonts/KohinoorDevanagari.ttc",  # macOS built-in
+    "/System/Library/Fonts/Kohinoor.ttc",            # macOS built-in (Devanagari)
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",  # Linux
+]
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -112,6 +123,24 @@ def run_ffmpeg(cmd: list[str]) -> None:
         raise RuntimeError(
             f"ffmpeg exited {result.returncode}:\n{result.stderr[-3000:]}"
         )
+
+
+def ffmpeg_has_ass_filter() -> bool:
+    """
+    Return True if this ffmpeg build exposes the libass 'ass' filter.
+
+    Some builds (e.g. certain Homebrew installs) are compiled without libass, so
+    the 'ass'/'subtitles' filters are unavailable.  In that case Stage 5 falls
+    back to PIL/MoviePy caption overlays instead of an FFmpeg burn-in pass.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-filters"],
+            capture_output=True, text=True,
+        )
+    except Exception:
+        return False
+    return bool(re.search(r"^\s*\S*\s+ass\s", result.stdout, re.MULTILINE))
 
 
 def probe_video(path: Path) -> dict:
@@ -203,6 +232,147 @@ def generate_disclaimer_png(profile: dict, output_path: Path,
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     img.save(str(output_path), "PNG")
+
+
+def _find_devanagari_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in _DEVANAGARI_FONT_CANDIDATES:
+        if Path(path).exists():
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                continue
+    return _find_font(size)
+
+
+def _chunk_words(timed_words: list, font, space_w: float, max_line_w: float,
+                 max_words: int) -> list:
+    """
+    Group a flat list of (start, end, text) words into short phrase chunks that
+    each fit on a single line (≤ max_line_w) and contain at most max_words words.
+
+    WhisperX segments are whole paragraphs; showing one at a time overflows the
+    frame.  Subtitles must advance a few words at a time — that is what this does.
+    """
+    chunks: list[list[tuple]] = []
+    cur: list[tuple] = []
+    cur_w = 0.0
+    for tw in timed_words:
+        wlen = font.getlength(tw[2])
+        add_w = wlen if not cur else cur_w + space_w + wlen
+        if cur and (add_w > max_line_w or len(cur) >= max_words):
+            chunks.append(cur)
+            cur = [tw]
+            cur_w = wlen
+        else:
+            cur.append(tw)
+            cur_w = add_w
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def generate_caption_overlays(job: dict, profile: dict, video_w: int, video_h: int, temp_dir: Path) -> list:
+    """
+    Generate transparent PNGs for short, word-highlighted caption phrases and
+    return a list of MoviePy ImageClips with correct start times / durations.
+
+    Words from all WhisperX segments are flattened, then grouped into short
+    phrases that fit on one line.  Each phrase is shown only during its own time
+    window; within a phrase the currently-spoken word is highlighted.
+    """
+    try:
+        from moviepy import ImageClip
+    except ImportError:
+        return []
+
+    assets = job.get("assets") or {}
+    segments = assets.get("whisper_word_timestamps")
+    if not segments:
+        return []
+
+    style_cfg = profile.get("captions", {}).get("style", {})
+    font_size = int(style_cfg.get("font_size", 48))
+    margin_bottom_percent = style_cfg.get("margin_bottom_percent", 8)
+    outline_color_raw = style_cfg.get("outline_color", "black")
+    outline_width = int(style_cfg.get("outline_width", 2))
+    highlight_current_word = style_cfg.get("highlight_current_word", True)
+    highlight_color_raw = style_cfg.get("highlight_color", "#FFD700")
+
+    MAX_WORDS_PER_CHUNK = 5
+
+    font = _find_devanagari_font(font_size)
+    space_w = font.getlength(" ")
+    margin_v = round(video_h * margin_bottom_percent / 100)
+    max_line_w = video_w * 0.9
+    base_y = video_h - margin_v - font_size
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Flatten all timed words across segments ───────────────────────────────
+    timed_words: list[tuple] = []
+    for seg in segments:
+        for w in seg.get("words", []):
+            wt = (w.get("word") or "").strip()
+            ws, we = w.get("start"), w.get("end")
+            if not wt or ws is None or we is None:
+                continue
+            timed_words.append((float(ws), float(we), wt))
+
+    if not timed_words:
+        return []
+
+    chunks = _chunk_words(timed_words, font, space_w, max_line_w, MAX_WORDS_PER_CHUNK)
+
+    def _draw_phrase(words_list: list, xs: list, active_idx: int) -> Path:
+        img = Image.new("RGBA", (video_w, video_h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        for j, w_text in enumerate(words_list):
+            fill_color = highlight_color_raw if j == active_idx else "white"
+            draw.text((xs[j], base_y), w_text, font=font, fill=fill_color,
+                      stroke_width=outline_width, stroke_fill=outline_color_raw)
+        p = temp_dir / f"cap_{_draw_phrase.idx}.png"
+        _draw_phrase.idx += 1
+        img.save(str(p))
+        return p
+    _draw_phrase.idx = 0
+
+    overlay_clips = []
+    for chunk in chunks:
+        words_list = [c[2] for c in chunk]
+        widths = [font.getlength(w) for w in words_list]
+        total_w = sum(widths) + space_w * (len(words_list) - 1)
+        start_x = (video_w - total_w) / 2
+
+        xs = []
+        x = start_x
+        for wlen in widths:
+            xs.append(x)
+            x += wlen + space_w
+
+        chunk_end = chunk[-1][1]
+
+        if not highlight_current_word:
+            p = _draw_phrase(words_list, xs, -1)
+            dur = chunk_end - chunk[0][0]
+            if dur > 0.01:
+                overlay_clips.append(
+                    ImageClip(str(p), duration=dur).with_fps(FPS).with_start(chunk[0][0])
+                )
+            continue
+
+        # One image per active word; each window runs until the next word starts
+        # (or the chunk ends), so there are no blank gaps mid-phrase.
+        for i in range(len(chunk)):
+            win_start = chunk[i][0]
+            win_end = chunk[i + 1][0] if i + 1 < len(chunk) else chunk_end
+            if win_end - win_start <= 0.01:
+                continue
+            p = _draw_phrase(words_list, xs, i)
+            overlay_clips.append(
+                ImageClip(str(p), duration=win_end - win_start).with_fps(FPS).with_start(win_start)
+            )
+
+    return overlay_clips
 
 
 # ─── Assembly (MoviePy) ───────────────────────────────────────────────────────
@@ -301,7 +471,12 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     music_path   = assets.get("background_music_path")
     has_music    = bool(music_path and Path(music_path).exists())
     ass_path     = assets.get("ass_path")
-    has_captions = bool(ass_path and Path(ass_path).exists())
+    ass_exists   = bool(ass_path and Path(ass_path).exists())
+    # Prefer FFmpeg ASS burn-in (best Devanagari shaping) only if this ffmpeg has
+    # libass; otherwise fall back to PIL/MoviePy overlays generated below.
+    has_captions = ass_exists and ffmpeg_has_ass_filter()
+    if ass_exists and not has_captions:
+        print("[Stage 5]   ffmpeg has no libass 'ass' filter — using PIL caption overlays instead.")
 
     # ── Disclaimer card (3 s static image) ───────────────────────────────────
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -425,6 +600,19 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     else:
         audio_out = voiceover
 
+    # ── Caption overlays — PIL fallback when no ASS file from stage 4d ──────────
+    temp_captions_dir = out_dir / "temp_captions"
+    if has_captions:
+        print(f"[Stage 5]   ASS captions found — will burn in via FFmpeg post-pass.")
+    else:
+        try:
+            caption_clips = generate_caption_overlays(job, profile, video_w, video_h, temp_captions_dir)
+            if caption_clips:
+                print(f"[Stage 5]   Generated {len(caption_clips)} caption overlay clips (PIL fallback).")
+                video_track = CompositeVideoClip([video_track] + caption_clips, size=(video_w, video_h)).with_duration(total_duration)
+        except Exception as e:
+            print(f"[Stage 5]   WARNING: Failed to generate caption overlays: {e}")
+
     final = video_track.with_audio(audio_out)
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -452,16 +640,23 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             clip.close()
         except Exception:
             pass
+            
+    # Cleanup temp captions directory
+    if temp_captions_dir.exists():
+        import shutil
+        shutil.rmtree(temp_captions_dir, ignore_errors=True)
 
     # ── Optional ASS caption burn-in (single FFmpeg pass) ────────────────────
     if has_captions:
         output_path = out_dir / "video.mp4"
-        escaped = str(ass_path).replace("\\", "\\\\").replace(":", "\\:")
+        abs_ass = str(Path(ass_path).resolve())
+        # FFmpeg filter graph escaping: backslash-escape backslashes and colons (macOS paths have none, but be safe)
+        escaped = abs_ass.replace("\\", "\\\\").replace(":", "\\:")
         print(f"\n[Stage 5] Burning ASS captions from {ass_path}…")
         run_ffmpeg([
             "ffmpeg", "-y",
             "-i", str(render_path),
-            "-vf", f"ass='{escaped}'",
+            "-vf", f"ass=filename={escaped}",
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "copy",
             str(output_path),
