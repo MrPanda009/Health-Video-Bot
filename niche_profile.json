@@ -14,7 +14,7 @@
         "default_audience": "middle_aged_older_adults"
     },
     "editorial": {
-        "target_audience_description": "Hindi-speaking middle-aged and older adults (35-65) managing or preventing chronic conditions like diabetes, hypertension, and heart disease. Generally comfortable with Hindi medical terminology. May have low health literacy but high motivation to act on credible information.",
+        "target_audience_description": "Hindi-speaking middle-aged and older adults (35-65) managing or preventing chronic conditions like diabetes, hypertension, and heart disease. They speak everyday conversational Hindi mixed with common English words — they say 'diabetes' not 'madhumeh', 'BP' not 'raktachaap'. They do NOT understand Sanskritized/formal Hindi medical terminology. High motivation to act on credible health information.",
         "topics": [
             "nutrition_and_diet",
             "mental_health_and_sleep",
@@ -25,12 +25,13 @@
         ],
         "tone": "friendly_educator",
         "tone_description": "Like a knowledgeable friend who happens to have a medical background. Never condescending, never alarmist. Speaks directly — 'aapko' not 'logon ko'. Makes the listener feel informed and capable, not scared.",
-        "terminology_style": "hindi_medical_terms",
+        "terminology_style": "colloquial_hinglish_medical",
         "terminology_rules": [
-            "Use Hindi medical terms where standard ones exist (e.g. 'madhumeh' for diabetes, 'raktachaap' for blood pressure, 'hriday' for heart)",
-            "If a term has no common Hindi equivalent, use the English term followed by a short Hindi parenthetical explanation on first use only",
-            "Never use jargon without explanation. Every term introduced must have context from the surrounding sentence",
-            "Avoid passive constructions — prefer active, direct phrasing"
+            "ALWAYS use the term that a modern Hindi speaker actually says out loud. If the English/borrowed term is what people say, use that — written in Roman script within the Devanagari sentence. Examples: write 'diabetes' not 'madhumeh', 'blood pressure' not 'raktachaap', 'heart attack' not 'hriday aaghat', 'protein' not 'protheen', 'calcium' not 'kailshiyam', 'exercise' not 'vyayam', 'stress' not 'tanav' (unless the Hindi word is equally common in speech).",
+            "Pure Sanskritized Hindi medical terms (madhumeh, raktachaap, hriday, etc.) are NOT understood by modern audiences and must NOT be used.",
+            "If a technical term is unfamiliar in any form, briefly explain it in plain Hindi on first use — but still use the common spoken form, not a Sanskrit equivalent.",
+            "Never use jargon without explanation. Every term introduced must have context from the surrounding sentence.",
+            "Avoid passive constructions — prefer active, direct phrasing."
         ]
     },
     "script": {
@@ -80,7 +81,7 @@
             }
         ],
         "script_language": "devanagari",
-        "script_language_instruction": "The entire voiceover script (hindi_script and every hindi_text field) MUST be written exclusively in Devanagari script. Do NOT use Roman/Latin transliteration of Hindi words (no Hinglish such as 'aapko', 'kya', 'shodh'). Every Hindi word must appear in Devanagari characters (e.g. आपको, क्या, शोध). English medical terms that have no standard Hindi equivalent may remain in Roman script.",
+        "script_language_instruction": "The entire voiceover script (hindi_script and every hindi_text field) MUST be written in Devanagari script. All Hindi words must be in Devanagari (e.g. आपको, क्या, शोध — NOT 'aapko', 'kya', 'shodh'). HOWEVER: widely-used English medical and technical terms that modern Hindi speakers actually say out loud (e.g. 'diabetes', 'blood pressure', 'heart attack', 'protein', 'calcium', 'exercise', 'stress', 'BMI', 'cholesterol', 'insulin') MUST remain in Roman script — do NOT replace them with pure Sanskrit/Hindi equivalents like 'madhumeh', 'raktachaap', 'hriday aaghat'. The test is: would a 45-year-old in Delhi say this word in normal conversation? If yes and they'd say it in English, keep it in Roman script.",
         "absolute_prohibitions": [
             "Never use causal language ('causes', 'cures', 'prevents') for observational studies",
             "Never recommend stopping or modifying prescribed medications",
