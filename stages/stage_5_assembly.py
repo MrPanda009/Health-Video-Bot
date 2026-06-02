@@ -269,6 +269,7 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             AudioFileClip,
             ColorClip,
             CompositeAudioClip,
+            CompositeVideoClip,
             ImageClip,
             VideoFileClip,
             concatenate_audioclips,
@@ -317,7 +318,9 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         for b in assets.get("broll_video_paths", [])
     }
     screenshot_paths = (job.get("study") or {}).get("screenshot_paths", [])
-    SCREENSHOT_SEGS  = {"context", "finding"}
+    # Only show screenshot once, in the first matching segment
+    SCREENSHOT_SEG   = "context"
+    screenshot_used  = False
 
     segment_clips: list = []
     for seg in job["content"]["script_segments"]:
@@ -325,18 +328,42 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         duration = float(seg["duration_hint_seconds"])
 
         use_screenshot = (
-            name in SCREENSHOT_SEGS
+            name == SCREENSHOT_SEG
+            and not screenshot_used
             and screenshot_paths
             and Path(screenshot_paths[0]).exists()
         )
 
         if use_screenshot:
-            clip = (
-                ImageClip(str(screenshot_paths[0]), duration=duration)
-                .with_fps(FPS)
-            )
-            clip = _mp_scale_crop(clip, video_w, video_h)
-            print(f"[Stage 5]   {name}: screenshot ({duration}s)")
+            screenshot_used = True
+            SCREENSHOT_DISPLAY_DURATION = 3.0
+            ss_display = min(SCREENSHOT_DISPLAY_DURATION, duration)
+
+            # Single continuous B-roll for the full segment duration — no restart
+            broll_paths = broll_map.get(name, [])
+            if broll_paths and Path(broll_paths[0]).exists():
+                bg_raw = VideoFileClip(str(broll_paths[0])).without_audio()
+                bg_raw = _mp_scale_crop(bg_raw, video_w, video_h)
+                bg = _mp_loop(bg_raw, duration)
+            else:
+                bg = ColorClip(
+                    size=(video_w, video_h), color=(20, 20, 20), duration=duration
+                ).with_fps(FPS)
+
+            # Scale screenshot to 60% of video width, keep aspect ratio
+            ss_target_w = int(video_w * 0.60)
+            ss_img = ImageClip(str(screenshot_paths[0]), duration=ss_display).with_fps(FPS)
+            ss_w, ss_h = ss_img.size
+            ss_target_h = int(ss_h * (ss_target_w / ss_w))
+            ss_img = ss_img.resized((ss_target_w, ss_target_h))
+            ss_x = (video_w - ss_target_w) // 2
+            ss_y = (video_h - ss_target_h) // 2
+            ss_img = ss_img.with_position((ss_x, ss_y))
+
+            # Composite: B-roll plays the whole segment; screenshot overlays first 3s only
+            clip = CompositeVideoClip([bg, ss_img], size=(video_w, video_h))
+
+            print(f"[Stage 5]   {name}: screenshot overlay {ss_display}s over b-roll ({duration}s total)")
         else:
             clip_paths = broll_map.get(name, [])
             if clip_paths and Path(clip_paths[0]).exists():
@@ -372,11 +399,20 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
 
     # ── Concatenate video track ───────────────────────────────────────────────
     print(f"\n[Stage 5] Concatenating {len(video_parts)} clip(s)…")
-    video_track   = concatenate_videoclips(video_parts)
-    total_duration = video_track.duration
+    video_track = concatenate_videoclips(video_parts)
 
     # ── Audio chain ───────────────────────────────────────────────────────────
+    # Load voiceover first — its duration is the authoritative timeline length.
+    # The video segments are built from duration_hint_seconds estimates that never
+    # match the real TTS output exactly, so we pin the video to the voiceover.
     voiceover = AudioFileClip(str(voiceover_path))
+    total_duration = voiceover.duration
+
+    print(f"[Stage 5]   Voiceover duration : {total_duration:.2f}s")
+    print(f"[Stage 5]   Video track duration: {video_track.duration:.2f}s")
+
+    # Trim or extend-freeze the video to exactly match the voiceover
+    video_track = video_track.with_duration(total_duration)
 
     if has_music:
         music = AudioFileClip(str(music_path))

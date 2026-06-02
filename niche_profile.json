@@ -34,14 +34,14 @@
         ]
     },
     "script": {
-        "format": "shorts",
-        "target_duration_seconds": 55,
-        "target_word_count_hindi": 130,
+        "format": "short_form",
+        "target_duration_seconds": 90,
+        "target_word_count_hindi": 220,
         "segment_structure": [
             {
                 "name": "hook",
-                "duration_seconds": 5,
-                "purpose": "Open with the core surprising finding as a direct statement or rhetorical question. Must reference the study immediately. No generic openers like 'Aaj hum baat karenge'.",
+                "duration_seconds": 8,
+                "purpose": "Open with the core surprising finding as a direct statement or rhetorical question that immediately makes the viewer feel this matters to their life. Must reference the study. No generic openers like 'Aaj hum baat karenge'. Make it personal — why should THIS person watching care RIGHT NOW.",
                 "example_openings": [
                     "Ek naye shodh mein paaya gaya ki...",
                     "Kya aap jaante hain ki sirf [X] din mein...",
@@ -50,27 +50,27 @@
             },
             {
                 "name": "context",
-                "duration_seconds": 10,
-                "purpose": "Who conducted the study, how many people were studied, what type of study it was. Build credibility. Mention the journal name in Hindi phonetic form if well-known (e.g. 'The Lancet' stays as is)."
+                "duration_seconds": 15,
+                "purpose": "Who conducted the study, how many people, what type of study, and crucially — WHY this research was done and what problem it was trying to solve. Explain what this condition or topic actually does to a person's daily life in simple terms before presenting the science. Build credibility through the journal and sample size."
             },
             {
                 "name": "finding",
-                "duration_seconds": 20,
-                "purpose": "The core result with exact numbers. This is the most important segment. Must include effect size or percentage. Must not overstate causal direction if study is observational."
+                "duration_seconds": 40,
+                "purpose": "The core result with exact numbers, AND a full plain-language explanation of what it means for a normal person. Cover: (1) what the study found with precise numbers, (2) what this means in practical terms — how it could improve, worsen, or change someone's daily life, energy, health, or longevity, (3) the biological or behavioural mechanism in simple words (why does this happen?), (4) who benefits most and who may not. This is the heart of the video — do not rush it. Use relatable analogies."
             },
             {
                 "name": "caveat",
-                "duration_seconds": 10,
-                "purpose": "What the study does NOT prove. Study limitations. Who this does or doesn't apply to. This segment is non-negotiable — every video must have it. Framed constructively, not as a takedown of the finding."
+                "duration_seconds": 15,
+                "purpose": "What the study does NOT prove. Who this may not apply to. Key limitations. Frame it as 'here is what we still don't know' rather than undermining the finding. Every video must have this. Be honest but constructive."
             },
             {
                 "name": "actionable_takeaway",
-                "duration_seconds": 7,
-                "purpose": "One concrete, safe action the viewer can take based on the evidence. Must be framed as a suggestion ('aap koshish kar sakte hain') not a prescription ('aapko karna chahiye'). Never recommend stopping medications or substituting professional advice."
+                "duration_seconds": 8,
+                "purpose": "One or two concrete, safe actions the viewer can take today based on the evidence. Make it specific and doable — not 'eat healthy' but 'replace your afternoon snack with X'. Frame as a suggestion. Never recommend stopping medications or substituting professional advice."
             },
             {
                 "name": "cta",
-                "duration_seconds": 3,
+                "duration_seconds": 4,
                 "purpose": "Subscribe + comment CTA. Keep it natural, not robotic. One of the pre-approved CTA variants below.",
                 "cta_variants": [
                     "Agar yeh jaankari useful lagi, toh channel ko subscribe karein aur comment mein batayein ki aap kis topic par aur jaanna chahte hain.",
@@ -192,12 +192,23 @@
     "youtube_upload": {
         "default_tags_always_include": [
             "health hindi",
-            "swasthya",
-            "sehat",
             "hindi health tips",
+            "health tips in hindi",
+            "sehat",
+            "swasthya",
+            "swasthya tips",
+            "स्वास्थ्य",
+            "सेहत",
+            "हिंदी स्वास्थ्य",
             "research based health",
-            "shodh aadharit swasthya"
+            "science based health",
+            "shodh aadharit swasthya",
+            "evidence based health hindi",
+            "health shorts",
+            "hindi shorts",
+            "स्वास्थ्य शॉर्ट्स"
         ],
+        "tags_instruction": "Generate 25-35 tags total covering three scripts: (1) English tags for the topic and study keywords, (2) Hinglish tags (Hindi words in Roman script, e.g. 'diabetes ke upay', 'sugar control kaise kare'), (3) Devanagari tags (same keywords in Hindi script, e.g. 'मधुमेह उपाय', 'शुगर कंट्रोल'). YouTube allows up to 500 characters total — keep each tag short. The default tags are already included; generate additional topic-specific tags only.",
         "description_template_sections": [
             "video_summary_2_lines",
             "study_citation",
@@ -212,8 +223,8 @@
         "upload_frequency_per_week": 3
     },
     "quality_gate": {
-        "min_duration_seconds": 45,
-        "max_duration_seconds": 65,
+        "min_duration_seconds": 75,
+        "max_duration_seconds": 115,
         "required_elements": [
             "medical_disclaimer_present",
             "sample_size_mentioned_in_script",

@@ -104,8 +104,8 @@ class ContentBlock(BaseModel):
     @field_validator("tags")
     @classmethod
     def enough_tags(cls, v):
-        if len(v) < 5:
-            raise ValueError(f"Need at least 5 tags, got {len(v)}")
+        if len(v) < 20:
+            raise ValueError(f"Need at least 20 tags, got {len(v)}")
         return v
 
     @field_validator("script_segments")
@@ -213,6 +213,7 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
 
     # Build default tags from profile
     default_tags = profile["youtube_upload"]["default_tags_always_include"]
+    tags_instruction = profile["youtube_upload"].get("tags_instruction", "")
 
     # Study citation for description
     authors = study.get("authors", [])
@@ -293,6 +294,12 @@ Thumbnail style variants to generate prompts for:
 {chr(10).join('- ' + v['id'] + ': ' + v['description'] for v in profile['thumbnail']['style_variants'])}
 Thumbnail rules: {'; '.join(profile['thumbnail']['text_overlay_rules'])}
 
+TAG RULES
+These default tags are always required — include all of them verbatim:
+{json.dumps(default_tags)}
+
+{tags_instruction}
+
 ═══════════════════════════════════════════════
 OUTPUT REQUIREMENTS
 ═══════════════════════════════════════════════
@@ -346,7 +353,7 @@ The JSON must match this exact structure:
 
   "description": "Full YouTube description in Hindi and English. Must include:\\n1. 2-line video summary\\n2. Study citation: {citation}\\n3. Medical disclaimer: {disclaimer_hindi} | {disclaimer_english}\\n4. AI disclosure: {ai_disclosure}\\n5. Subscribe CTA",
 
-  "tags": {json.dumps(default_tags + ["add", "8-10", "more", "relevant", "tags", "here"])},
+  "tags": ["...25-35 tags total: see TAG RULES below..."],
 
   "broll_search_tags": [
     {{
