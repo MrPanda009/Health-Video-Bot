@@ -337,11 +337,13 @@ def run(job_id: str) -> dict:
                 shutil.copy2(cached, dest)
                 collected.append(str(dest))
                 print(f"[Stage 4a]   ✓ cache  '{search_term}' → {dest.name}")
-                # Register it in the DB for future reuse
+                # Register it in the DB for future reuse — point to cache file,
+                # not the job copy, so verify_integrity doesn't false-positive
+                # when this job's assets are later cleaned up.
                 resolution, duration_probed = _probe_clip(dest)
                 db.add_clip(
-                    filename=dest.name,
-                    filepath=str(dest.resolve()),
+                    filename=cached.name,
+                    filepath=str(cached.resolve()),
                     source_url=f"cache:{slug}",
                     search_tags=[search_term],
                     content_tags=[],
@@ -376,15 +378,20 @@ def run(job_id: str) -> dict:
                 dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
                 if download_clip(url, dest, api_duration):
                     # Cache the first successful download for this term
+                    did_cache = False
                     if first_download_for_term and not cached.exists():
                         shutil.copy2(dest, cached)
                         first_download_for_term = False
+                        did_cache = True
 
                     resolution, duration_probed = _probe_clip(dest)
                     license_type = "pexels_free" if "pexels.com" in url else "pixabay"
+                    # Store cache path when available so verify_integrity checks a
+                    # long-lived location instead of the ephemeral job directory.
+                    canonical_path = cached if did_cache else dest
                     db.add_clip(
-                        filename=dest.name,
-                        filepath=str(dest.resolve()),
+                        filename=canonical_path.name,
+                        filepath=str(canonical_path.resolve()),
                         source_url=url,
                         search_tags=[search_term],
                         content_tags=[],
