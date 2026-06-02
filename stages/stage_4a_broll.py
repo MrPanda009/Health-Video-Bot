@@ -337,9 +337,6 @@ def run(job_id: str) -> dict:
                 shutil.copy2(cached, dest)
                 collected.append(str(dest))
                 print(f"[Stage 4a]   ✓ cache  '{search_term}' → {dest.name}")
-                # Register it in the DB for future reuse — point to cache file,
-                # not the job copy, so verify_integrity doesn't false-positive
-                # when this job's assets are later cleaned up.
                 resolution, duration_probed = _probe_clip(dest)
                 db.add_clip(
                     filename=cached.name,
@@ -364,8 +361,7 @@ def run(job_id: str) -> dict:
                 print(f"[Stage 4a]   Pixabay '{search_term}': {len(pb_clips)} result(s)")
                 clips = clips + pb_clips  # Pexels quality first
 
-            # ── Download up to what we still need ────────────────────────
-            first_download_for_term = True
+            # ── Download to cache first, then copy to job folder ─────────
             for url, api_duration in clips:
                 if len(collected) >= CLIPS_PER_SEGMENT:
                     break
@@ -375,23 +371,23 @@ def run(job_id: str) -> dict:
                     print(f"[Stage 4a]   ⟳ skip  duplicate URL: {url[:60]}…")
                     continue
 
-                dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
-                if download_clip(url, dest, api_duration):
-                    # Cache the first successful download for this term
-                    did_cache = False
-                    if first_download_for_term and not cached.exists():
-                        shutil.copy2(dest, cached)
-                        first_download_for_term = False
-                        did_cache = True
+                # Find the next free slot in cache for this slug
+                cache_path = cache_dir / f"{slug}.mp4"
+                idx = 1
+                while cache_path.exists():
+                    cache_path = cache_dir / f"{slug}_{idx}.mp4"
+                    idx += 1
 
-                    resolution, duration_probed = _probe_clip(dest)
+                if download_clip(url, cache_path, api_duration):
+                    # Copy from cache to job-specific folder
+                    dest = broll_dir / f"{seg_name}_{len(collected)}.mp4"
+                    shutil.copy2(cache_path, dest)
+
+                    resolution, duration_probed = _probe_clip(cache_path)
                     license_type = "pexels_free" if "pexels.com" in url else "pixabay"
-                    # Store cache path when available so verify_integrity checks a
-                    # long-lived location instead of the ephemeral job directory.
-                    canonical_path = cached if did_cache else dest
                     db.add_clip(
-                        filename=canonical_path.name,
-                        filepath=str(canonical_path.resolve()),
+                        filename=cache_path.name,
+                        filepath=str(cache_path.resolve()),
                         source_url=url,
                         search_tags=[search_term],
                         content_tags=[],
