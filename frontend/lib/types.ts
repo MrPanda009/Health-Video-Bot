@@ -141,6 +141,7 @@ export interface Job {
   updated_at: string
   status: JobStatus
   aspect_ratio: '9:16' | '16:9'
+  render_mode?: 'draft' | 'final'
   topic?: string | null
   error: JobError | null
   study: Study | null
@@ -157,6 +158,7 @@ export interface JobSummary {
   updated_at: string
   topic: string | null
   title: string | null
+  render_mode: 'draft' | 'final'
   error: JobError | null
 }
 

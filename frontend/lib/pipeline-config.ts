@@ -17,6 +17,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_1_research.py',
     prerequisite: 'created',
     completedStatus: 'stage_1_complete',
+    isComplete: (job) => !!job.study,
   },
   {
     key: 'stage_2',
@@ -24,6 +25,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_2_claim_extraction.py',
     prerequisite: 'stage_1_complete',
     completedStatus: 'stage_2_complete',
+    isComplete: (job) => !!job.claims,
   },
   {
     key: 'stage_3',
@@ -31,6 +33,7 @@ export const STAGES: StageDefinition[] = [
     script: 'stages/stage_3_content_generation.py',
     prerequisite: 'stage_2_complete',
     completedStatus: 'stage_3_complete',
+    isComplete: (job) => !!job.content,
   },
   {
     key: 'stage_4a',
@@ -106,6 +109,8 @@ export function getStageUIState(
   if (stage.completedStatus) {
     const completedIdx = getStatusIndex(stage.completedStatus)
     if (currentIdx >= completedIdx) return 'complete'
+    // Error state: status index is -1, so fall back to data-based completion check
+    if (jobStatus === 'error' && stage.isComplete && job && stage.isComplete(job)) return 'complete'
   }
 
   // Sub-stages: use isComplete(job) if available, otherwise fall back to stage_4_complete

@@ -53,6 +53,7 @@ ASSETS_DIR         = os.getenv("ASSETS_DIR", "assets")
 
 FPS                 = 30
 DISCLAIMER_DURATION = 3            # seconds prepended to every video
+BROLL_CUT_INTERVAL  = 5.0          # seconds before cutting to next B-roll clip
 
 # Supported output dimensions keyed by aspect_ratio string
 _ASPECT_DIMS: dict[str, tuple[int, int]] = {
@@ -115,6 +116,26 @@ def mark_error(job: dict, message: str) -> dict:
 
 
 # ─── FFmpeg wrappers ──────────────────────────────────────────────────────────
+
+def _pick_video_codec(draft: bool = False) -> tuple[str, list[str], dict]:
+    """Return (codec, ffmpeg_params, write_kwargs) preferring Apple VideoToolbox on macOS.
+
+    draft=True uses ultrafast preset + threads=0 for faster preview renders.
+    """
+    extra_write: dict = {"threads": 0}
+    try:
+        out = subprocess.run(
+            ["ffmpeg", "-encoders", "-v", "quiet"],
+            capture_output=True, text=True, timeout=5
+        ).stdout
+        if "h264_videotoolbox" in out:
+            q = "72" if draft else "65"
+            return "h264_videotoolbox", ["-q:v", q, "-pix_fmt", "yuv420p", "-movflags", "+faststart"], extra_write
+    except Exception:
+        pass
+    preset = "ultrafast" if draft else "fast"
+    return "libx264", ["-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], {**extra_write, "preset": preset}
+
 
 def run_ffmpeg(cmd: list[str]) -> None:
     """Run an ffmpeg command. Raises RuntimeError with stderr on failure."""
@@ -408,7 +429,84 @@ def _mp_loop(clip, duration: float):
     return concatenate_videoclips([clip] * n).subclipped(0, duration)
 
 
-def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
+def _speed_up_audio(src: Path, dst: Path, speed: float) -> None:
+    """Write a time-stretched copy of src to dst via FFmpeg atempo (range 0.5–2.0)."""
+    run_ffmpeg(["ffmpeg", "-y", "-i", str(src),
+                "-filter:a", f"atempo={speed:.4f}",
+                "-vn", str(dst)])
+
+
+def _mix_audio(
+    voiceover_path: str,
+    music_path: str,
+    output_path: str,
+    music_volume_db: float = -16.5,
+    voiceover_volume_db: float = -2.0,
+) -> None:
+    """Mix voiceover + looped background music via pydub overlay.
+
+    Using pydub instead of MoviePy's CompositeAudioClip avoids the gain-reduction
+    artefact that occurs when the voiceover peaks at 0 dBFS: MoviePy sums samples
+    and the resulting >0 dBFS peaks cause the AAC encoder to normalise the whole
+    mix down, making the music inaudible.  pydub's overlay() clips the sum at 0 dBFS
+    without gain-reducing the entire signal.
+    """
+    try:
+        from pydub import AudioSegment
+    except ImportError:
+        raise ImportError("pydub is required for audio mixing — pip install pydub")
+
+    vo = AudioSegment.from_wav(voiceover_path)
+    music = AudioSegment.from_file(music_path)
+
+    loops_needed = math.ceil(len(vo) / len(music))
+    music_looped = music * loops_needed
+    music_trimmed = music_looped[: len(vo)]
+
+    mixed = vo.apply_gain(voiceover_volume_db).overlay(
+        music_trimmed.apply_gain(music_volume_db)
+    )
+    mixed.export(output_path, format="wav")
+
+
+def _build_broll_segment(paths: list[str], duration: float,
+                          video_w: int, video_h: int) -> object | None:
+    """
+    Build a segment clip by cutting between B-roll clips every BROLL_CUT_INTERVAL seconds.
+
+    Cycles through all valid paths so consecutive chunks show different footage.
+    Returns None if no valid paths exist.
+    """
+    from moviepy import VideoFileClip, concatenate_videoclips
+
+    valid = [p for p in paths if Path(p).exists()]
+    if not valid:
+        return None
+
+    raws = [_mp_scale_crop(VideoFileClip(p).without_audio(), video_w, video_h)
+            for p in valid]
+
+    chunks = []
+    t, idx = 0.0, 0
+    while t < duration - 0.05:
+        chunk_dur = min(BROLL_CUT_INTERVAL, duration - t)
+        raw = raws[idx % len(raws)]
+        # Advance into the clip on each reuse so repeated chunks aren't identical
+        usable = max(0.0, raw.duration - chunk_dur)
+        offset = (idx * BROLL_CUT_INTERVAL) % raw.duration if usable == 0 else (idx * BROLL_CUT_INTERVAL) % usable
+        if raw.duration >= offset + chunk_dur:
+            chunks.append(raw.subclipped(offset, offset + chunk_dur))
+        else:
+            chunks.append(_mp_loop(raw, chunk_dur))
+        t += chunk_dur
+        idx += 1
+
+    if not chunks:
+        return None
+    return concatenate_videoclips(chunks)
+
+
+def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False) -> Path:
     """
     Assemble the final video using MoviePy.
 
@@ -418,6 +516,8 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     Audio: voiceover at 100 % mixed with optional background music at 15 %.
     ASS captions (if present from Stage 4d) are burned in via a single FFmpeg
     post-pass so Stage 5 does not depend on MoviePy for that filter.
+
+    draft=True halves the output resolution and uses ultrafast encoding for fast previews.
 
     Dimensions from job["aspect_ratio"]: "9:16" → 1080×1920, "16:9" → 1920×1080.
 
@@ -438,11 +538,9 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         from moviepy import (
             AudioFileClip,
             ColorClip,
-            CompositeAudioClip,
             CompositeVideoClip,
             ImageClip,
             VideoFileClip,
-            concatenate_audioclips,
             concatenate_videoclips,
         )
     except ImportError:
@@ -453,11 +551,14 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         )
 
     video_w, video_h = _video_dims(job)
+    if draft:
+        video_w, video_h = video_w // 2, video_h // 2
     assets  = job.get("assets") or {}
     job_id  = job["job_id"]
 
     ar_label = job.get("aspect_ratio", "9:16")
-    print(f"[Stage 5] Aspect ratio: {ar_label} → {video_w}×{video_h}")
+    mode_label = " [DRAFT — half resolution]" if draft else ""
+    print(f"[Stage 5] Aspect ratio: {ar_label} → {video_w}×{video_h}{mode_label}")
 
     # ── Voiceover (required) ──────────────────────────────────────────────────
     voiceover_path = assets.get("voiceover_path")
@@ -468,8 +569,19 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             f"assets/{job_id}/audio/voiceover.wav and set assets.voiceover_path in the job."
         )
 
-    music_path   = assets.get("background_music_path")
-    has_music    = bool(music_path and Path(music_path).exists())
+    music_path = assets.get("background_music_path")
+    if not music_path or not Path(music_path).exists():
+        # Auto-pick a random track from assets/music/
+        import random
+        music_dir = Path(ASSETS_DIR) / "music"
+        candidates = [
+            p for p in music_dir.glob("*")
+            if p.suffix.lower() in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+        ] if music_dir.is_dir() else []
+        if candidates:
+            music_path = str(random.choice(candidates))
+            print(f"[Stage 5]   Auto-selected background music: {Path(music_path).name}")
+    has_music = bool(music_path and Path(music_path).exists())
     ass_path     = assets.get("ass_path")
     ass_exists   = bool(ass_path and Path(ass_path).exists())
     # Prefer FFmpeg ASS burn-in (best Devanagari shaping) only if this ffmpeg has
@@ -514,13 +626,10 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             SCREENSHOT_DISPLAY_DURATION = 3.0
             ss_display = min(SCREENSHOT_DISPLAY_DURATION, duration)
 
-            # Single continuous B-roll for the full segment duration — no restart
+            # Cutting B-roll as background for the full segment duration
             broll_paths = broll_map.get(name, [])
-            if broll_paths and Path(broll_paths[0]).exists():
-                bg_raw = VideoFileClip(str(broll_paths[0])).without_audio()
-                bg_raw = _mp_scale_crop(bg_raw, video_w, video_h)
-                bg = _mp_loop(bg_raw, duration)
-            else:
+            bg = _build_broll_segment(broll_paths, duration, video_w, video_h)
+            if bg is None:
                 bg = ColorClip(
                     size=(video_w, video_h), color=(20, 20, 20), duration=duration
                 ).with_fps(FPS)
@@ -541,11 +650,12 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
             print(f"[Stage 5]   {name}: screenshot overlay {ss_display}s over b-roll ({duration}s total)")
         else:
             clip_paths = broll_map.get(name, [])
-            if clip_paths and Path(clip_paths[0]).exists():
-                raw = VideoFileClip(str(clip_paths[0])).without_audio()
-                raw = _mp_scale_crop(raw, video_w, video_h)
-                clip = _mp_loop(raw, duration)
-                print(f"[Stage 5]   {name}: b-roll ({duration}s)")
+            built = _build_broll_segment(clip_paths, duration, video_w, video_h)
+            if built is not None:
+                clip = built
+                n_clips = len([p for p in clip_paths if Path(p).exists()])
+                n_cuts = max(1, math.ceil(duration / BROLL_CUT_INTERVAL))
+                print(f"[Stage 5]   {name}: b-roll {n_cuts} cut(s) across {n_clips} clip(s) ({duration}s)")
             else:
                 clip = ColorClip(
                     size=(video_w, video_h), color=(0, 0, 0), duration=duration
@@ -590,15 +700,23 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     video_track = video_track.with_duration(total_duration)
 
     if has_music:
-        music = AudioFileClip(str(music_path))
-        if music.duration < total_duration:
-            n = math.ceil(total_duration / music.duration)
-            music = concatenate_audioclips([music] * n)
-        music = music.subclipped(0, total_duration).with_volume_scaled(0.15)
-        audio_out = CompositeAudioClip([voiceover, music])
-        print(f"[Stage 5]   Background music: {Path(music_path).name} @ 15 %")
+        # Pre-mix via FFmpeg: voiceover at -2 dB headroom + music at -16.5 dB (~15%).
+        # MoviePy's CompositeAudioClip sums samples, which pushes peaks above 0 dBFS
+        # when the voiceover is already normalised; the AAC encoder then applies gain
+        # reduction that makes the music inaudible.  Doing the mix in FFmpeg with
+        # explicit volume controls avoids that normalisation artefact.
+        mixed_audio_path = out_dir / "mixed_audio.wav"
+        _mix_audio(
+            voiceover_path=str(voiceover_path),
+            music_path=str(music_path),
+            output_path=str(mixed_audio_path),
+            music_volume_db=-16.5,   # ≈ 15 % amplitude
+            voiceover_volume_db=-2.0, # 2 dB headroom to prevent clipping
+        )
+        audio_out = AudioFileClip(str(mixed_audio_path))
+        print(f"[Stage 5]   Background music: {Path(music_path).name} @ 15 % (FFmpeg mix)")
     else:
-        audio_out = voiceover
+        audio_out = AudioFileClip(str(voiceover_path))
 
     # ── Caption overlays — PIL fallback when no ASS file from stage 4d ──────────
     temp_captions_dir = out_dir / "temp_captions"
@@ -613,6 +731,21 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
         except Exception as e:
             print(f"[Stage 5]   WARNING: Failed to generate caption overlays: {e}")
 
+    # ── Subscribe overlay ────────────────────────────────────────────────────
+    subscribe_path = Path(ASSETS_DIR) / "subscribe.mp4"
+    if subscribe_path.exists():
+        sub_clip = VideoFileClip(str(subscribe_path))
+        sub_start = max(0.0, total_duration - sub_clip.duration - 2.0)
+        sub_x = (video_w - sub_clip.w) // 2
+        sub_y = video_h - sub_clip.h - int(video_h * 0.05)  # 5% margin from bottom
+        sub_clip = sub_clip.with_position((sub_x, sub_y)).with_start(sub_start)
+        video_track = CompositeVideoClip(
+            [video_track, sub_clip], size=(video_w, video_h)
+        ).with_duration(total_duration)
+        print(f"[Stage 5]   Subscribe overlay: {sub_clip.duration:.1f}s starting at {sub_start:.1f}s")
+    else:
+        print(f"[Stage 5]   No subscribe.mp4 found at {subscribe_path} — skipping overlay")
+
     final = video_track.with_audio(audio_out)
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -620,18 +753,20 @@ def assemble_video(job: dict, profile: dict, out_dir: Path) -> Path:
     # FFmpeg pass for the ASS filter.  Otherwise the MoviePy output IS the final.
     render_path = out_dir / ("video_raw.mp4" if has_captions else "video.mp4")
 
+    vcodec, vparams, vextra = _pick_video_codec(draft=draft)
+    mode_tag = " [DRAFT]" if draft else ""
     print(f"\n[Stage 5] Rendering with MoviePy "
-          f"({video_w}×{video_h}, {total_duration:.1f}s)…")
-    final.write_videofile(
-        str(render_path),
+          f"({video_w}×{video_h}, {total_duration:.1f}s, codec={vcodec}{mode_tag})…")
+    write_kwargs: dict = dict(
         fps=FPS,
-        codec="libx264",
+        codec=vcodec,
         audio_codec="aac",
         audio_bitrate="128k",
-        preset="fast",
         logger="bar",
-        ffmpeg_params=["-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+        ffmpeg_params=vparams,
+        **vextra,
     )
+    final.write_videofile(str(render_path), **write_kwargs)
 
     # ── Release MoviePy file handles ──────────────────────────────────────────
     disclaimer_png.unlink(missing_ok=True)
@@ -727,7 +862,7 @@ def run_quality_gate(output_path: Path, profile: dict) -> dict:
 
 # ─── Main runner ──────────────────────────────────────────────────────────────
 
-def run(job_id: str) -> dict:
+def run(job_id: str, draft: bool = False) -> dict:
     """
     Main Stage 5 runner.
 
@@ -739,6 +874,7 @@ def run(job_id: str) -> dict:
 
     Args:
         job_id: UUID of the job.
+        draft:  If True, halves resolution and uses ultrafast encoding for fast previews.
 
     Returns:
         Updated job dict with status stage_5_complete or error.
@@ -776,9 +912,9 @@ def run(job_id: str) -> dict:
 
     # ── Assemble ─────────────────────────────────────────────────────────────
     out_dir = Path(ASSETS_DIR) / job_id / "output"
-    print(f"[Stage 5] Assembling video for job {job_id}")
+    print(f"[Stage 5] Assembling video for job {job_id}" + (" [DRAFT]" if draft else ""))
     try:
-        output_path = assemble_video(job, profile, out_dir)
+        output_path = assemble_video(job, profile, out_dir, draft=draft)
     except FileNotFoundError as e:
         return mark_error(job, str(e))
     except RuntimeError as e:
@@ -820,10 +956,14 @@ def run(job_id: str) -> dict:
 
 if __name__ == "__main__":
     # Usage:
-    #   python stage_5_assembly.py <job_id>
-    #   python stage_5_assembly.py          ← auto-picks most recent eligible job
+    #   python stage_5_assembly.py <job_id> [--draft]
+    #   python stage_5_assembly.py [--draft]   ← auto-picks most recent eligible job
 
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    draft_mode = "--draft" in args
+    positional = [a for a in args if not a.startswith("--")]
+
+    if not positional:
         jobs_dir   = Path(JOBS_DIR)
         candidates = []
         for jf in jobs_dir.glob("*.json"):
@@ -848,9 +988,9 @@ if __name__ == "__main__":
         label = "retrying errored" if picked_status == "error" else "most recent"
         print(f"[Stage 5] No job_id provided — using {label}: {job_id}")
     else:
-        job_id = sys.argv[1]
+        job_id = positional[0]
 
-    result = run(job_id)
+    result = run(job_id, draft=draft_mode)
     print(f"\nFinal status : {result['status']}")
     if result.get("error"):
         print(f"Error        : {result['error']['message']}")

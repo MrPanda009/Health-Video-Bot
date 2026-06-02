@@ -49,6 +49,16 @@ except ImportError as _e:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+_TOTAL_STEPS = 6
+
+
+def _step(n: int, label: str) -> None:
+    """Print a numbered step indicator with a filled progress bar."""
+    filled = int(20 * n / _TOTAL_STEPS)
+    bar = "█" * filled + "─" * (20 - filled)
+    print(f"[Stage 4d] [{bar}] {n}/{_TOTAL_STEPS} {label}", flush=True)
+
+
 def load_job(job_id: str) -> dict:
     p = Path(JOBS_DIR) / f"{job_id}.json"
     if not p.exists():
@@ -242,12 +252,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # ─── Main stage logic ─────────────────────────────────────────────────────────
 
-def run(job_id: str) -> dict:
+def run(job_id: str, model_size: str = "large-v2") -> dict:
     print(f"[Stage 4d] Starting for job {job_id}", flush=True)
 
-    # ── Guard: whisperx must be installed ────────────────────────────────────
+    # ── Step 1: Guard — whisperx must be installed ────────────────────────────
+    _step(1, "Checking dependencies")
     if not _WHISPERX_AVAILABLE:
-        # Load job so we can mark it as errored
         try:
             job = load_job(job_id)
         except FileNotFoundError as e:
@@ -261,7 +271,8 @@ def run(job_id: str) -> dict:
             f"Original error: {_WHISPERX_IMPORT_ERROR}",
         )
 
-    # ── Load job ──────────────────────────────────────────────────────────────
+    # ── Step 2: Load job + verify voiceover ──────────────────────────────────
+    _step(2, "Loading job")
     try:
         job = load_job(job_id)
     except FileNotFoundError as e:
@@ -277,7 +288,6 @@ def run(job_id: str) -> dict:
         )
         return job
 
-    # ── Locate voiceover ──────────────────────────────────────────────────────
     voiceover_path = (job.get("assets") or {}).get("voiceover_path")
     if not voiceover_path:
         return mark_error(
@@ -290,16 +300,15 @@ def run(job_id: str) -> dict:
             f"Voiceover file not found on disk: {voiceover_path}",
         )
 
-    # ── Transcribe ────────────────────────────────────────────────────────────
-    print(f"[Stage 4d] Transcribing: {voiceover_path}", flush=True)
+    # ── Step 3: Transcribe with WhisperX ─────────────────────────────────────
+    _step(3, f"Transcribing with WhisperX (model: {model_size})")
     try:
-        segments = transcribe(voiceover_path, language="hi")
+        segments = transcribe(voiceover_path, language="hi", model_size=model_size)
     except ImportError as e:
         return mark_error(job, str(e))
     except FileNotFoundError as e:
         return mark_error(job, str(e))
     except RuntimeError as e:
-        # Model not downloaded — give a clear, actionable message
         return mark_error(
             job,
             f"WhisperX model error: {e}\n"
@@ -311,10 +320,11 @@ def run(job_id: str) -> dict:
     if not segments:
         return mark_error(job, "Transcription returned empty output — audio may be silent.")
 
-    print(f"[Stage 4d] Got {len(segments)} segments with "
-          f"{sum(len(s['words']) for s in segments)} words.", flush=True)
+    total_words = sum(len(s["words"]) for s in segments)
+    print(f"[Stage 4d] ✓ {len(segments)} segments, {total_words} words", flush=True)
 
-    # ── Save word timestamps JSON ──────────────────────────────────────────────
+    # ── Step 4: Save word timestamps JSON ────────────────────────────────────
+    _step(4, "Saving word timestamps")
     job_id_str = job["job_id"]
     captions_dir = Path(ASSETS_DIR) / job_id_str / "captions"
     captions_dir.mkdir(parents=True, exist_ok=True)
@@ -322,31 +332,34 @@ def run(job_id: str) -> dict:
     timestamps_path = str(captions_dir / "word_timestamps.json")
     with open(timestamps_path, "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
-    print(f"[Stage 4d] Word timestamps saved to {timestamps_path}", flush=True)
+    print(f"[Stage 4d] ✓ {timestamps_path}", flush=True)
 
-    # ── Generate SRT ──────────────────────────────────────────────────────────
+    # ── Step 5: Generate SRT + ASS ───────────────────────────────────────────
+    _step(5, f"Generating captions ({len(segments)} segments)")
+
     srt_path = str(captions_dir / "captions.srt")
     srt_content = segments_to_srt(segments)
     with open(srt_path, "w", encoding="utf-8") as f:
         f.write(srt_content)
-    print(f"[Stage 4d] SRT saved to {srt_path}", flush=True)
+    print(f"[Stage 4d] ✓ SRT → {srt_path}", flush=True)
 
-    # ── Generate ASS ──────────────────────────────────────────────────────────
+    ass_path = None
     try:
         profile = load_niche_profile()
         style_config = profile.get("captions", {}).get("style", {})
         video_w, video_h = _video_dims(job)
-        
+
         ass_path = str(captions_dir / "captions.ass")
         ass_content = segments_to_ass(segments, style_config, video_w, video_h)
         with open(ass_path, "w", encoding="utf-8") as f:
             f.write(ass_content)
-        print(f"[Stage 4d] ASS saved to {ass_path}", flush=True)
+        print(f"[Stage 4d] ✓ ASS → {ass_path}", flush=True)
     except Exception as e:
         print(f"[Stage 4d] WARNING: Failed to generate ASS file: {e}", flush=True)
         ass_path = None
 
-    # ── Update job ────────────────────────────────────────────────────────────
+    # ── Step 6: Update job ────────────────────────────────────────────────────
+    _step(6, "Saving job")
     if job.get("assets") is None:
         job["assets"] = {}
     job["assets"]["whisper_word_timestamps"] = segments
@@ -356,14 +369,21 @@ def run(job_id: str) -> dict:
     job["updated_at"] = datetime.now(timezone.utc).isoformat()
     save_job(job)
 
-    print(f"[Stage 4d] Complete.", flush=True)
+    print(f"[Stage 4d] [████████████████████] Complete.", flush=True)
     return job
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    import argparse
+    parser = argparse.ArgumentParser(description="Stage 4d — WhisperX captions")
+    parser.add_argument("job_id", nargs="?", default=None)
+    parser.add_argument("--model", default="large-v2",
+                        help="WhisperX transcription model (default: large-v2)")
+    args = parser.parse_args()
+
+    if args.job_id is None:
         # Auto-pick the most recent job at a runnable status
         candidates = []
         for jf in Path(JOBS_DIR).glob("*.json"):
@@ -380,6 +400,6 @@ if __name__ == "__main__":
         _job_id = candidates[0][1]
         print(f"[Stage 4d] Auto-selected job: {_job_id}", flush=True)
     else:
-        _job_id = sys.argv[1]
+        _job_id = args.job_id
 
-    run(_job_id)
+    run(_job_id, model_size=args.model)

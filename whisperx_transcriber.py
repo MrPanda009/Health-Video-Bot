@@ -127,8 +127,14 @@ def transcribe(
             })
         return segments
 
+    raw_segs = result.get("segments", [])
+    total = len(raw_segs)
     segments = []
-    for seg in result.get("segments", []):
+    for i, seg in enumerate(raw_segs, 1):
+        filled = int(20 * i / total) if total else 20
+        bar = "█" * filled + "─" * (20 - filled)
+        sys.stdout.write(f"\r[whisperx] Extracting segments  [{bar}] {i}/{total}")
+        sys.stdout.flush()
         words = _extract_words(seg.get("words", []))
         segments.append({
             "text": seg.get("text", "").strip(),
@@ -136,8 +142,10 @@ def transcribe(
             "end": float(seg.get("end", 0)),
             "words": words,
         })
+    sys.stdout.write("\n")
 
-    print(f"[whisperx] Done — {len(segments)} segments.", flush=True)
+    total_words = sum(len(s["words"]) for s in segments)
+    print(f"[whisperx] Done — {len(segments)} segments, {total_words} words.", flush=True)
     return segments
 
 

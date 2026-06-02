@@ -13,6 +13,7 @@ function summarize(job: Job): JobSummary {
     updated_at: job.updated_at,
     topic: job.study?.topic ?? job.topic ?? null,
     title: job.content?.title ?? null,
+    render_mode: job.render_mode ?? 'final',
     error: job.error ?? null,
   }
 }

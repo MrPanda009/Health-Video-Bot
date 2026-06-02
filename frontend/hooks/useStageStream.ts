@@ -39,6 +39,7 @@ function applyChunk(prev: string[], chunk: string): string[] {
 export interface StreamParams {
   topic?: string
   pmid?: string
+  whisperModel?: string
 }
 
 export function useStageStream(jobId: string) {
@@ -72,6 +73,7 @@ export function useStageStream(jobId: string) {
       const qs = new URLSearchParams()
       if (params?.topic) qs.set('topic', params.topic)
       if (params?.pmid) qs.set('pmid', params.pmid)
+      if (params?.whisperModel) qs.set('whisperModel', params.whisperModel)
 
       const url = `/api/jobs/${jobId}/stage/${stage}/stream?${qs.toString()}`
       const es = new EventSource(url)

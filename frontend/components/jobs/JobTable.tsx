@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ArrowRight, Clock } from 'lucide-react'
+import { useState } from 'react'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import type { JobSummary } from '@/lib/types'
 
@@ -14,6 +15,45 @@ function relativeTime(iso: string) {
   const hrs = Math.floor(mins / 60)
   if (hrs < 24) return `${hrs}h ago`
   return `${Math.floor(hrs / 24)}d ago`
+}
+
+function RenderModeToggle({ jobId, initial }: { jobId: string; initial: 'draft' | 'final' }) {
+  const [mode, setMode] = useState<'draft' | 'final'>(initial)
+  const [saving, setSaving] = useState(false)
+
+  async function toggle(e: React.MouseEvent) {
+    e.stopPropagation()
+    const next = mode === 'draft' ? 'final' : 'draft'
+    setSaving(true)
+    try {
+      await fetch(`/api/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ render_mode: next }),
+      })
+      setMode(next)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const isDraft = mode === 'draft'
+  return (
+    <button
+      onClick={toggle}
+      disabled={saving}
+      title={isDraft ? 'Draft render — click to switch to Final' : 'Final render — click to switch to Draft'}
+      className={[
+        'inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium transition-colors',
+        isDraft
+          ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/40 dark:text-amber-400 dark:hover:bg-amber-900/70'
+          : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-400 dark:hover:bg-emerald-900/70',
+        saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+      ].join(' ')}
+    >
+      {isDraft ? 'Draft' : 'Final'}
+    </button>
+  )
 }
 
 interface JobTableProps {
@@ -37,6 +77,7 @@ export function JobTable({ jobs }: JobTableProps) {
         <thead>
           <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
             <th className="px-4 py-3 text-left font-medium text-zinc-500">Topic</th>
+            <th className="px-4 py-3 text-left font-medium text-zinc-500">Mode</th>
             <th className="px-4 py-3 text-left font-medium text-zinc-500">Status</th>
             <th className="px-4 py-3 text-left font-medium text-zinc-500">Updated</th>
             <th className="px-4 py-3 text-left font-medium text-zinc-500">Job ID</th>
@@ -59,6 +100,9 @@ export function JobTable({ jobs }: JobTableProps) {
                 {job.title && job.topic && (
                   <div className="truncate text-xs text-zinc-500">{job.topic}</div>
                 )}
+              </td>
+              <td className="px-4 py-3">
+                <RenderModeToggle jobId={job.job_id} initial={job.render_mode ?? 'final'} />
               </td>
               <td className="px-4 py-3">
                 <StatusBadge status={job.status} />

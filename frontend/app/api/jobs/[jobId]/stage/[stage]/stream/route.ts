@@ -23,6 +23,7 @@ export async function GET(
   const url = new URL(request.url)
   const topic = url.searchParams.get('topic') ?? ''
   const pmid = url.searchParams.get('pmid') ?? ''
+  const whisperModel = url.searchParams.get('whisperModel') ?? ''
 
   const stageDef = STAGES.find((s) => s.key === stage)
   if (!stageDef) {
@@ -37,12 +38,27 @@ export async function GET(
   const scriptPath = path.join(PIPELINE_ROOT, stageDef.script)
   const pythonBin = resolvePython()
 
+  // Read render_mode from job to decide whether to pass --draft to stage 5
+  let renderMode: string | undefined
+  if (stage === 'stage_5') {
+    try {
+      const raw = fs.readFileSync(jobFile, 'utf-8')
+      renderMode = JSON.parse(raw).render_mode
+    } catch { /* ignore */ }
+  }
+
   // Stage 1: topic, pmid, '' (aspect_ratio default), jobId as pre_created_job_id
+  // Stage 4d: jobId [--model <modelId>]
+  // Stage 5: jobId [--draft]
   // All other stages: jobId only
   const args =
     stage === 'stage_1'
       ? [scriptPath, topic, pmid, '', jobId]
-      : [scriptPath, jobId]
+      : stage === 'stage_4d' && whisperModel
+        ? [scriptPath, jobId, '--model', whisperModel]
+        : stage === 'stage_5' && renderMode === 'draft'
+          ? [scriptPath, jobId, '--draft']
+          : [scriptPath, jobId]
 
   const encoder = new TextEncoder()
 

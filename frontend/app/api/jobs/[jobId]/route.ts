@@ -43,16 +43,56 @@ export async function PATCH(
 ) {
   const { jobId } = await params
   const body = await request.json().catch(() => ({}))
-  const { status } = body as { status?: JobStatus }
-
-  if (!status || !VALID_STATUSES.includes(status)) {
-    return Response.json({ error: 'Invalid status' }, { status: 400 })
-  }
+  const { status, render_mode } = body as { status?: JobStatus; render_mode?: 'draft' | 'final' }
 
   const job = readJob(jobId)
   if (!job) return Response.json({ error: 'Job not found' }, { status: 404 })
 
-  job.status = status
+  if (status !== undefined) {
+    if (!VALID_STATUSES.includes(status)) {
+      return Response.json({ error: 'Invalid status' }, { status: 400 })
+    }
+    job.status = status
+
+    const newIdx = VALID_STATUSES.indexOf(status)
+    // Roll back downstream data when moving to an earlier status so that
+    // sub-stage isComplete() checks don't show stale "complete" state.
+    if (newIdx <= VALID_STATUSES.indexOf('stage_3_complete')) {
+      // Clear stage-4 sub-stage fields
+      if (job.assets) {
+        job.assets.broll_video_paths = []
+        job.assets.broll_missing_segments = []
+        job.assets.thumbnail_paths = []
+        job.assets.voiceover_path = null
+        job.assets.voiceover_duration_seconds = null
+        job.assets.srt_path = null
+        job.assets.ass_path = null
+        job.assets.whisper_word_timestamps = []
+      }
+      // Clear stage-5 output
+      job.output = null
+    } else if (newIdx <= VALID_STATUSES.indexOf('stage_4_complete')) {
+      job.output = null
+    }
+
+    if (newIdx <= VALID_STATUSES.indexOf('stage_2_complete')) {
+      job.content = null
+    }
+    if (newIdx <= VALID_STATUSES.indexOf('stage_1_complete')) {
+      job.claims = null
+    }
+    if (newIdx <= VALID_STATUSES.indexOf('created')) {
+      job.study = null
+    }
+  }
+
+  if (render_mode !== undefined) {
+    if (render_mode !== 'draft' && render_mode !== 'final') {
+      return Response.json({ error: 'render_mode must be draft or final' }, { status: 400 })
+    }
+    job.render_mode = render_mode
+  }
+
   job.updated_at = new Date().toISOString()
   fs.writeFileSync(jobPath(jobId), JSON.stringify(job, null, 2))
 

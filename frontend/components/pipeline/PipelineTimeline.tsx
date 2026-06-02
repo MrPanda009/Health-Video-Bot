@@ -26,10 +26,19 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
 
   const handleRun = useCallback(
     async (key: StageKey, params?: StreamParams) => {
+      let finalParams = params
+      if (key === 'stage_4d') {
+        const storedModel = typeof window !== 'undefined'
+          ? localStorage.getItem('whisper_selected_model')
+          : null
+        if (storedModel) {
+          finalParams = { ...params, whisperModel: storedModel }
+        }
+      }
       const res = await fetch(`/api/jobs/${job.job_id}/stage/${key}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'run', ...params }),
+        body: JSON.stringify({ action: 'run', ...finalParams }),
       })
       if (!res.ok) {
         const err = await res.json()
@@ -37,7 +46,7 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
         return
       }
       // Pass key directly — no React state timing dependency
-      stream.start(key, params)
+      stream.start(key, finalParams)
     },
     [job.job_id, stream],
   )
@@ -127,7 +136,7 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
             )}
             <StageRow
               stage={stage}
-              uiState={getStageUIState(stage, job.status, job.error?.stage)}
+              uiState={getStageUIState(stage, job.status, job.error?.stage, job)}
               onRun={handleRun}
               onSkip={(k) => handleSkip(k as StageKey)}
               isRunning={stream.activeStage === stage.key && stream.isRunning}

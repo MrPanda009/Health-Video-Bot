@@ -12,6 +12,47 @@ import { PipelineTimeline } from '@/components/pipeline/PipelineTimeline'
 import { JobDataExplorer } from '@/components/explorer/JobDataExplorer'
 import { CopyButton } from '@/components/terminal/CopyButton'
 
+function RenderModeSelect({ jobId, initial }: { jobId: string; initial: 'draft' | 'final' }) {
+  const [mode, setMode] = useState<'draft' | 'final'>(initial)
+  const [saving, setSaving] = useState(false)
+
+  async function onChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const next = e.target.value as 'draft' | 'final'
+    setSaving(true)
+    try {
+      await fetch(`/api/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ render_mode: next }),
+      })
+      setMode(next)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-xs text-zinc-500">Render:</span>
+      <select
+        value={mode}
+        onChange={onChange}
+        disabled={saving}
+        className={[
+          'rounded border px-2 py-0.5 text-xs font-medium transition-colors focus:outline-none',
+          mode === 'draft'
+            ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+            : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+          saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+        ].join(' ')}
+      >
+        <option value="draft">Draft</option>
+        <option value="final">Final</option>
+      </select>
+    </div>
+  )
+}
+
 export default function JobDetailPage() {
   const router = useRouter()
   const { jobId } = useParams<{ jobId: string }>()
@@ -76,6 +117,7 @@ export default function JobDetailPage() {
         <div className="mb-8 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <StatusBadge status={job.status} />
+            <RenderModeSelect jobId={job.job_id} initial={job.render_mode ?? 'final'} />
             {job.output?.youtube_url && (
               <a
                 href={job.output.youtube_url}
