@@ -20,6 +20,7 @@ Exit status written to job: "stage_1_complete" or "error"
 
 import json
 import os
+import sys
 import uuid
 import time
 import asyncio
@@ -33,6 +34,10 @@ from Bio import Entrez
 from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
+
+# Study/topic DB lives one level up from stages/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from study_db import StudyDB
 
 load_dotenv()
 
@@ -1007,11 +1012,18 @@ def run(
         Job dict with study{} populated and status "stage_1_complete",
         or status "error" on failure.
     """
-    profile = load_niche_profile()
+    profile   = load_niche_profile()
+    study_db  = StudyDB()
+    cooldown_days = profile["research"].get("study_cooldown_days", 30)
 
     if topic is None:
-        topic = profile["research"]["topic_rotation"][0]
-        print(f"[Stage 1] No topic provided — using rotation: '{topic}'")
+        active_topics = study_db.get_topics(active_only=True)
+        if active_topics:
+            topic = active_topics[0]["name"]
+            print(f"[Stage 1] Auto-selected topic (LRU): '{topic}'")
+        else:
+            topic = profile["research"]["topic_rotation"][0]
+            print(f"[Stage 1] No topics in DB — using niche_profile fallback: '{topic}'")
 
     if pre_created_job_id:
         job_path = Path(JOBS_DIR) / f"{pre_created_job_id}.json"
@@ -1049,6 +1061,43 @@ def run(
         if not candidates:
             return mark_error(job, "No candidates passed ranking")
 
+        # ── Cooldown filter + topic fallback ─────────────────────────────────
+        if not pmid_override:
+            available = [c for c in candidates if not study_db.is_in_cooldown(c.pmid)]
+            if not available:
+                print(f"[Stage 1] All candidates in cooldown for topic: '{topic}'")
+                tried = {topic}
+                all_topics = study_db.get_topics(active_only=True)
+                for t in all_topics:
+                    if t["name"] in tried:
+                        continue
+                    print(f"[Stage 1] Trying next topic: '{t['name']}'")
+                    alt_query     = build_pubmed_query(t["name"], profile)
+                    alt_pmids     = search_pubmed(alt_query, max_results=10)
+                    if not alt_pmids:
+                        tried.add(t["name"])
+                        continue
+                    alt_summaries = fetch_study_summaries(alt_pmids)
+                    alt_summaries = enrich_with_citation_counts(alt_summaries)
+                    alt_candidates = rank_candidates(alt_summaries, profile)
+                    alt_available  = [c for c in alt_candidates if not study_db.is_in_cooldown(c.pmid)]
+                    if alt_available:
+                        topic      = t["name"]
+                        query      = alt_query
+                        summaries  = alt_summaries
+                        candidates = alt_candidates
+                        available  = alt_available
+                        print(f"[Stage 1] Found {len(available)} available candidate(s) for '{topic}'")
+                        break
+                    tried.add(t["name"])
+                if not available:
+                    return mark_error(job, "All candidate studies across all active topics are in cooldown.")
+            else:
+                in_cooldown_count = len(candidates) - len(available)
+                if in_cooldown_count:
+                    print(f"[Stage 1] Skipped {in_cooldown_count} candidate(s) in cooldown; {len(available)} available")
+            candidates = available
+
         # ── Manual selection ─────────────────────────────────────────────────
         display_candidates(candidates)
 
@@ -1062,7 +1111,10 @@ def run(
                 choice = "1"
                 print("[Stage 1] Non-interactive mode — auto-selecting top-ranked candidate")
             if choice in ("1", "2", "3"):
-                selected_pmid = candidates[int(choice) - 1].pmid
+                idx = int(choice) - 1
+                if idx >= len(candidates):
+                    idx = 0
+                selected_pmid = candidates[idx].pmid
             elif choice.isdigit() and len(choice) > 3:
                 selected_pmid = choice
             else:
@@ -1084,6 +1136,20 @@ def run(
         job["status"] = "stage_1_complete"
         save_job(job)
 
+        # ── Register study + topic usage ─────────────────────────────────────
+        study_db.add_or_update_study(
+            pmid=study.pmid,
+            topic=study.topic,
+            title=study.title,
+            authors=study.authors,
+            journal=study.journal,
+            year=study.year,
+            doi=study.doi,
+            study_type=study.study_type,
+        )
+        study_db.mark_study_used(study.pmid, job_id, cooldown_days)
+        study_db.mark_topic_used(study.topic)
+
         print(f"\n[Stage 1] ✓ Complete.")
         print(f"  Job ID     : {job_id}")
         print(f"  Study      : {study.title[:65]}...")
@@ -1102,8 +1168,6 @@ def run(
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
-
     # Usage examples:
     #   python stage_1_research.py
     #       Uses first topic from rotation, prompts for selection

@@ -209,6 +209,51 @@ export interface ClipStats {
   total_duration_sec: number
 }
 
+// ─── Study history ────────────────────────────────────────────────────────────
+
+export type StudyEntryStatus = 'active' | 'cooldown'
+
+export interface StudyEntry {
+  pmid: string
+  topic: string
+  title: string
+  authors: string[]
+  journal: string | null
+  year: number | null
+  doi: string | null
+  study_type: string | null
+  last_used_at: string | null
+  last_used_job: string | null
+  cooldown_until: string | null
+  created_at: string
+  status: StudyEntryStatus
+}
+
+export interface StudyStats {
+  total: number
+  active: number
+  in_cooldown: number
+}
+
+// ─── Topic pool ───────────────────────────────────────────────────────────────
+
+export interface Topic {
+  id: string
+  name: string
+  times_used: number
+  last_used_at: string | null
+  created_at: string
+  active: boolean
+}
+
+export interface TopicStats {
+  total_active: number
+  total_inactive: number
+  total_uses: number
+  most_used: string | null
+  least_used: string | null
+}
+
 // ─── App settings ─────────────────────────────────────────────────────────────
 
 export interface AssemblySettings {

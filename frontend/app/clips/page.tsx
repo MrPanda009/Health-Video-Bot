@@ -80,8 +80,19 @@ function TagPill({ tag }: { tag: string }) {
   )
 }
 
+function clipUrl(filePath: string): string {
+  if (filePath.includes('cache/')) {
+    return '/api/assets/cache/' + filePath.replace(/^.*cache\//, '')
+  }
+  return '/api/assets/' + filePath.replace(/^.*assets\//, '')
+}
+
 function ClipRow({ clip }: { clip: Clip }) {
   const [expanded, setExpanded] = useState(false)
+
+  const displayPath = clip.filepath.includes('cache/')
+    ? 'cache/' + clip.filepath.replace(/^.*cache\//, '')
+    : clip.filepath.replace(/^.*assets\//, 'assets/')
 
   return (
     <tr
@@ -90,48 +101,72 @@ function ClipRow({ clip }: { clip: Clip }) {
     >
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-16 shrink-0 items-center justify-center rounded bg-zinc-200 dark:bg-zinc-700">
-            <Film size={16} className="text-zinc-400" />
+          <div className="relative flex h-10 w-16 shrink-0 items-center justify-center overflow-hidden rounded bg-zinc-200 dark:bg-zinc-700">
+            <video
+              src={clipUrl(clip.filepath)}
+              className="h-full w-full object-cover"
+              preload="metadata"
+              muted
+              playsInline
+              onMouseEnter={(e) => {
+                e.currentTarget.play().catch(() => {})
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.pause()
+                e.currentTarget.currentTime = 0
+              }}
+            />
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
               {clip.filename}
             </p>
             <p className="truncate text-xs text-zinc-400">
-              {clip.filepath.replace(/^.*\/assets\//, 'assets/')}
+              {displayPath}
             </p>
           </div>
         </div>
         {expanded && (
-          <div className="mt-3 space-y-2 rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-800/60">
-            <div>
-              <span className="text-zinc-500">Source URL: </span>
-              <a
-                href={clip.source_url.startsWith('http') ? clip.source_url : undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="break-all text-blue-600 hover:underline dark:text-blue-400"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {clip.source_url}
-              </a>
+          <div
+            className="mt-3 flex flex-col md:flex-row gap-4 rounded-lg bg-zinc-50 p-3 text-xs dark:bg-zinc-800/60"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-full md:w-64 shrink-0">
+              <video
+                src={clipUrl(clip.filepath)}
+                controls
+                className="w-full rounded border border-zinc-200 dark:border-zinc-700"
+              />
             </div>
-            <div>
-              <span className="text-zinc-500">Full path: </span>
-              <span className="font-mono text-zinc-700 dark:text-zinc-300">{clip.filepath}</span>
-            </div>
-            <div>
-              <span className="text-zinc-500">DB ID: </span>
-              <span className="font-mono text-zinc-400">{clip.id}</span>
-            </div>
-            {clip.last_used_project && (
+            <div className="space-y-2 flex-1 min-w-0">
               <div>
-                <span className="text-zinc-500">Last project: </span>
-                <span className="font-mono text-zinc-700 dark:text-zinc-300">
-                  {clip.last_used_project}
-                </span>
+                <span className="text-zinc-500 font-medium">Source URL: </span>
+                <a
+                  href={clip.source_url.startsWith('http') ? clip.source_url : undefined}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  {clip.source_url}
+                </a>
               </div>
-            )}
+              <div>
+                <span className="text-zinc-500 font-medium">Full path: </span>
+                <span className="font-mono text-zinc-700 dark:text-zinc-300 break-all">{clip.filepath}</span>
+              </div>
+              <div>
+                <span className="text-zinc-500 font-medium">DB ID: </span>
+                <span className="font-mono text-zinc-400">{clip.id}</span>
+              </div>
+              {clip.last_used_project && (
+                <div>
+                  <span className="text-zinc-500 font-medium">Last project: </span>
+                  <span className="font-mono text-zinc-700 dark:text-zinc-300">
+                    {clip.last_used_project}
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </td>

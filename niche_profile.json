@@ -254,6 +254,7 @@
             "semantic_scholar",
             "pmc_open_access"
         ],
+        "study_cooldown_days": 30,
         "topic_rotation": [
             "type 2 diabetes diet intervention",
             "sleep quality chronic disease",
