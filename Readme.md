@@ -9,32 +9,35 @@ Automated Hindi health education video pipeline. Takes a PubMed health research 
 | Stage | Script | Status | What it does |
 |---|---|---|---|
 | 0 | `stages/stage_0_clean.py` | ✅ | Interactive job & asset cleanup utility |
-| 1 | `stages/stage_1_research.py` | ✅ | PubMed search, citation ranking, PDF + screenshot acquisition |
+| 1 | `stages/stage_1_research.py` | ✅ | Auto-selects topic (LRU) or accepts query, searches PubMed, ranks citations, filters by study cooldown, downloads PDF & captures screenshots |
 | 2 | `stages/stage_2_claim_extraction.py` | ✅ | LLM claim extraction + safety flags |
-| 3 | `stages/stage_3_content_generation.py` | ✅ | Master LLM call — Hindi script, metadata, thumbnail prompts, B-roll tags |
-| 4a | `stages/stage_4a_broll.py` | ✅ | Pexels/Pixabay B-roll download with SQLite clip library |
+| 3 | `stages/stage_3_content_generation.py` | ✅ | Master LLM call — Hindi script (enforcing Devanagari script), metadata (with study citation + direct link), thumbnail prompts, B-roll tags |
+| 4a | `stages/stage_4a_broll.py` | ✅ | B-roll video downloader with Pexels/Pixabay fallback and SQLite caching |
 | 4b | `stages/stage_4b_thumbnail.py` | ✅ | AI thumbnail generation (DALL-E 3 or Vertex Imagen) |
 | 4c | `stages/stage_4c_voiceover.py` | ✅ | Sarvam AI Hindi TTS, chunk-splitting, WAV concatenation |
-| 4d | `stages/stage_4d_captions.py` | ✅ | WhisperX transcription → SRT captions + word timestamps |
-| 5 | `stages/stage_5_assembly.py` | ✅ | MoviePy assembly + quality gate |
+| 4d | `stages/stage_4d_captions.py` | ✅ | WhisperX transcription → SRT/ASS captions + word-level timestamps (configurable model) |
+| 5 | `stages/stage_5_assembly.py` | ✅ | MoviePy assembly + visual transitions & pan/zoom animations + subtitle burn-in (with PIL overlay fallback for Devanagari text) + quality gate |
 | 6 | `stages/stage_6_upload.py` | 🔲 TODO | YouTube Data API v3 upload |
 
 **Supporting modules (project root):**
-- `broll_db.py` — SQLite clip registry (dedup, LRU reuse, integrity checking)
+- `study_db.py` — SQLite-backed registry tracking studies and topics (cooldown & LRU selection)
+- `seed_topics.py` — Utility script to seed the `study_db` with 120+ clinical research topics
+- `broll_db.py` — SQLite B-roll clip cache and registry (integrity check, deduplication, LRU reuse)
 - `whisperx_transcriber.py` — WhisperX-based audio transcription returning word-level timestamps
 - `edit_decision.py` — Generates an EDL JSON from a transcript and the B-roll clip database
-- `video_assembler.py` — Overlays B-roll from an EDL onto a base A-roll video using MoviePy
+- `video_assembler.py` — Overlays B-roll from an EDL onto a base A-roll video using MoviePy with custom transitions/animations
 - `niche_profile.json` — all editorial config; never hardcode values from it in stage scripts
 - `job_schema.json` — canonical shape of a job state object
+- `settings.json` — global persistent configuration settings (assembly & pipeline parameters)
 
 **Frontend dashboard (`frontend/`):**
 - Next.js + React + Tailwind CSS
-- Jobs list with live status polling
-- Per-job pipeline timeline — run any stage and stream its stdout in real time
-- Job data explorer (study, claims, script, assets, output)
-- Clip Library page — browse, filter by status, and verify the B-roll SQLite database
-- **Models page** — check which WhisperX models are downloaded, download missing ones with live progress streaming
-- New Job dialog — choose topic, optional PMID, and output format (9:16 Shorts / 16:9 Landscape)
+- **Jobs dashboard** — jobs list with live status polling, render mode/Whisper model configuration, stage runner execution, and live stdout log streaming
+- **Clips Library (`/clips`)** — browse and filter cached B-roll clips, and visually run integrity checks on files
+- **Models page (`/models`)** — check which WhisperX models are downloaded, and download missing ones with live progress streaming
+- **Topics dashboard (`/topics`)** — view, add, or deactivate PubMed search queries, with stats on topic utilization
+- **Studies registry (`/studies`)** — view all used papers, publication details, and monitor their active/cooldown status
+- **Settings panel (`/settings`)** — view and edit the application's global configuration parameters (`settings.json`)
 
 ---
 
@@ -54,34 +57,43 @@ Both formats are full HD. The format is chosen at job creation and stored in `jo
 ```
 health_video_bot/
 │
-├── broll_db.py                 # SQLite clip registry
+├── study_db.py                 # SQLite study and topic database registry
+├── seed_topics.py              # Seeds 120+ default clinical research topics into DB
+├── broll_db.py                 # SQLite B-roll clip registry
 ├── whisperx_transcriber.py     # WhisperX transcription with word-level timestamps
 ├── edit_decision.py            # EDL generator: transcript → clip placements
 ├── video_assembler.py          # MoviePy assembler: base video + EDL → final video
 ├── niche_profile.json          # Editorial DNA — all stages read this
 ├── job_schema.json             # Canonical job state schema
+├── settings.json               # Global persistent config (read by frontend and stages)
 │
 ├── stages/
 │   ├── model_manager.py        # CLI: check/download WhisperX models (called by frontend)
 │   ├── stage_0_clean.py        # Interactive job & asset cleanup
-│   ├── stage_1_research.py
+│   ├── stage_1_research.py     # PubMed search & study extraction (LRU topic, cooldown checks)
 │   ├── stage_2_claim_extraction.py
 │   ├── stage_3_content_generation.py
 │   ├── stage_4a_broll.py
 │   ├── stage_4b_thumbnail.py
 │   ├── stage_4c_voiceover.py
-│   ├── stage_4d_captions.py    # WhisperX → SRT + word timestamps
-│   └── stage_5_assembly.py     # MoviePy assembly + quality gate
+│   ├── stage_4d_captions.py    # WhisperX → SRT/ASS + word-level timestamps
+│   └── stage_5_assembly.py     # MoviePy assembly + animations/transitions + quality gate
 │
 ├── frontend/                   # Next.js dashboard
 │   ├── app/
 │   │   ├── jobs/               # Job list + per-job detail pages
 │   │   ├── clips/              # Clip library page
 │   │   ├── models/             # WhisperX model download page
+│   │   ├── topics/             # Topics management page
+│   │   ├── studies/            # Studies registry page
+│   │   ├── settings/           # Global settings management panel
 │   │   └── api/
 │   │       ├── jobs/           # Job CRUD + stage runner + SSE log streaming
 │   │       ├── clips/          # Clip library + integrity verify
-│   │       └── models/         # Model status check + download SSE stream
+│   │       ├── models/         # Model status check + download SSE stream
+│   │       ├── topics/         # CRUD for topics database
+│   │       ├── studies/        # Reads study records & stats
+│   │       └── settings/       # Reads and writes settings.json
 │   ├── components/
 │   └── hooks/
 │
@@ -93,15 +105,16 @@ health_video_bot/
 │   │   ├── broll/
 │   │   ├── thumbnails/
 │   │   ├── audio/
-│   │   ├── captions/           # word_timestamps.json + captions.srt
+│   │   ├── captions/           # word_timestamps.json + captions.srt + captions.ass
 │   │   └── output/
 │   ├── intro.mp4               # Optional — prepended to every video
 │   ├── outro.mp4               # Optional — appended to every video
 │   └── music/                  # Shared background tracks (manual)
 │
 └── cache/
-    ├── broll/                  # Cached clips by search-term slug
-    └── broll_cache.db          # SQLite clip registry (managed by broll_db.py)
+    ├── broll/                  # Cached clips by search-term slug (populated before copying)
+    ├── broll_cache.db          # SQLite B-roll registry (managed by broll_db.py)
+    └── study_db.sqlite         # SQLite studies & topics database (managed by study_db.py)
 ```
 
 ---
@@ -109,14 +122,17 @@ health_video_bot/
 ## Pipeline Flow
 
 ```
-[Stage 1]  PubMed search → PDF/screenshots → study{}
+                  [StudyDB (Topics)]
+                         │ (LRU selection)
+                         ▼
+[Stage 1]  PubMed search → PDF/screenshots → check cooldown → update StudyDB → study{}
 [Stage 2]  LLM claim extraction + safety flags → claims{}
 [Stage 3]  Master LLM call → hindi_script + metadata + prompts → content{}
                ↓                    ↓                   ↓              ↓
-[Stage 4a] B-roll download   [Stage 4b] Thumbnails  [Stage 4c] TTS   [Stage 4d] Captions
+[Stage 4a] B-roll download   [Stage 4b] Thumbnails  [Stage 4c] TTS   [Stage 4d] Captions (model select)
                └──────────────────────┴───────────────────┴──────────────┘
-                              → assets{}  (status → stage_4_complete)
-[Stage 5]  MoviePy assembly + quality gate → output/video.mp4
+                               → assets{}  (status → stage_4_complete)
+[Stage 5]  MoviePy assembly + transitions/animations + Devanagari caption burn-in → output/video.mp4
 [Stage 6]  YouTube upload (TODO)
 ```
 
@@ -127,7 +143,7 @@ audio file
 transcript JSON (word-level timestamps)
     ↓  edit_decision.py
 EDL JSON (clip placements)
-    ↓  video_assembler.py
+    ↓  video_assembler.py (with default transitions/animations)
 final video (B-roll overlaid on A-roll, base audio preserved)
 ```
 
@@ -150,11 +166,11 @@ Every stage reads `jobs/{job_id}.json`, does its work, writes its output block b
 uv venv
 source .venv/bin/activate
 uv pip install biopython playwright requests openai anthropic \
-               pydub pillow python-dotenv moviepy
+               pydub pillow python-dotenv moviepy numpy
 playwright install chromium
 ```
 
-FFmpeg must be installed at the system level (required by MoviePy and the quality gate):
+FFmpeg must be installed at the system level (required by MoviePy, the quality gate, and caption burn-in):
 ```bash
 brew install ffmpeg        # macOS
 sudo apt install ffmpeg    # Ubuntu/Debian
@@ -165,7 +181,7 @@ sudo apt install ffmpeg    # Ubuntu/Debian
 pip install torch
 pip install whisperx
 # Then download models from the dashboard at /models, or via CLI:
-python stages/model_manager.py download large-v2
+python stages/model_manager.py download large-v3
 python stages/model_manager.py download align-hi
 ```
 
@@ -191,8 +207,9 @@ ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 GROQ_API_KEY=              # Free tier — recommended for dev (console.groq.com)
 
+# Default LLM configuration
 LLM_MODEL=llama-3.3-70b-versatile   # or claude-sonnet-4-6, gpt-4o
-LLM_PROVIDER=groq                   # auto | groq | openai
+LLM_PROVIDER=groq                   # auto | groq | openai | anthropic
 
 # PubMed
 ENTREZ_EMAIL=              # Required by NCBI ToS (any email)
@@ -216,14 +233,13 @@ ASSETS_DIR=assets
 CACHE_DIR=cache
 ```
 
-**Dev shortcut:** Groq is free and fast enough for Stages 2 & 3. Get a key at [console.groq.com](https://console.groq.com).
-
 ### 4. One-time manual setup
 
 - [ ] Set `channel.youtube_channel_id` in `niche_profile.json`
 - [ ] Test Sarvam AI voices and set `audio.sarvam_voice_id` in `niche_profile.json`
 - [ ] Download 5–8 royalty-free background tracks → `assets/music/`
 - [ ] Optionally create `assets/intro.mp4` (≤3 s) and `assets/outro.mp4` (≤5 s)
+- [ ] Seed default research topics: `python seed_topics.py`
 - [ ] Download WhisperX models (Stage 4d): open the dashboard `/models` page and click Download
 
 ---
@@ -240,17 +256,21 @@ CACHE_DIR=cache
 .venv/bin/python3 stages/stage_4a_broll.py
 .venv/bin/python3 stages/stage_4b_thumbnail.py
 .venv/bin/python3 stages/stage_4c_voiceover.py
-.venv/bin/python3 stages/stage_4d_captions.py   # requires whisperx + downloaded models
-.venv/bin/python3 stages/stage_5_assembly.py
 
-# Pass a job_id explicitly
+# Stage 4d — requires whisperx. Can explicitly supply model size
+.venv/bin/python3 stages/stage_4d_captions.py <job_id> --model large-v3
+
+# Stage 5 Assembly — can pass draft flag, transition preferences, and image animations
+.venv/bin/python3 stages/stage_5_assembly.py <job_id> --draft --animation-type ken_burns --transition-type crossfade --transition-duration 0.4
+
+# Pass a job_id explicitly to any stage
 .venv/bin/python3 stages/stage_2_claim_extraction.py <job_id>
 
-# Stage 1 — topic, PMID, and aspect ratio (all optional)
+# Stage 1 research parameters (topic, PMID override, aspect ratio - all optional)
 .venv/bin/python3 stages/stage_1_research.py "gut microbiome diabetes" "" 9:16
 .venv/bin/python3 stages/stage_1_research.py "" 38452901 16:9
 
-# Clean up old jobs
+# Clean up old jobs and unused assets
 .venv/bin/python3 stages/stage_0_clean.py
 ```
 
@@ -258,7 +278,7 @@ CACHE_DIR=cache
 
 ```bash
 # Transcribe audio → word-level timestamps JSON
-.venv/bin/python3 whisperx_transcriber.py voiceover.wav hi large-v2
+.venv/bin/python3 whisperx_transcriber.py voiceover.wav hi large-v3
 
 # Generate EDL from transcript + B-roll DB
 .venv/bin/python3 edit_decision.py transcript.json edl.json
@@ -266,8 +286,8 @@ CACHE_DIR=cache
 # Preview the edit plan before rendering
 .venv/bin/python3 video_assembler.py --preview edl.json
 
-# Render final video (B-roll overlaid on A-roll)
-.venv/bin/python3 video_assembler.py base_footage.mp4 edl.json final.mp4
+# Render final video (B-roll overlaid on A-roll with custom transitions and animations)
+.venv/bin/python3 video_assembler.py base_footage.mp4 edl.json final.mp4 --transition-type crossfade --animation-type ken_burns --transition-duration 0.4
 ```
 
 ### WhisperX model management
@@ -277,8 +297,24 @@ CACHE_DIR=cache
 .venv/bin/python3 stages/model_manager.py status
 
 # Download a specific model
-.venv/bin/python3 stages/model_manager.py download large-v2
+.venv/bin/python3 stages/model_manager.py download large-v3
 .venv/bin/python3 stages/model_manager.py download align-hi
+```
+
+### Study & Topic Database Management
+
+```bash
+# List all topics in the DB
+.venv/bin/python3 study_db.py topics list
+
+# Add a new research topic query
+.venv/bin/python3 study_db.py topics add "cardiovascular disease risk factors South Asian adults"
+
+# Deactivate/Remove a topic (soft-delete)
+.venv/bin/python3 study_db.py topics remove <topic_uuid>
+
+# List study usage history
+.venv/bin/python3 study_db.py studies list --status cooldown
 ```
 
 ### Dashboard
@@ -288,9 +324,80 @@ cd frontend && npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). Use the navigation to:
-- **Jobs** — create jobs, run pipeline stages, stream logs live
+- **Jobs** — create/delete jobs, configure render mode & Whisper model, run pipeline stages, stream logs live
 - **Clips** — browse the B-roll library, verify file integrity
 - **Models** — check WhisperX model download status, download missing models
+- **Topics** — manage search terms, add new queries, view topic stats
+- **Studies** — view paper history, track cooldown statuses
+- **Settings** — edit global transition options, default models, and visual animations
+
+---
+
+## Study & Topic Database (`study_db.py`)
+
+To ensure content variety, the pipeline maintains a SQLite database (`cache/study_db.sqlite`) containing two tables:
+1. **`topics`**: The pool of PubMed search terms. Each topic has an `active` status and a `times_used` counter. If no topic is passed to Stage 1, it queries this table and selects the active topic with the **least uses / oldest usage date (Least Recently Used - LRU)**.
+2. **`studies`**: A registry of every paper processed by the pipeline. When a study is selected, it enters a cooldown phase of `study_cooldown_days` (default `30` days, configured in `niche_profile.json`).
+
+### Cooldown and Auto-Fallback
+During Stage 1:
+- If a candidate paper from the current topic's search results is in active cooldown, it is skipped.
+- If **all** candidate papers for the selected topic are in cooldown, Stage 1 will automatically fall back and search the subsequent active topics in the database (ordered by oldest usage) until it finds a topic with eligible, non-cooldown papers.
+- Once a study is selected, the database records the paper's metadata, flags the study as in cooldown, and increments the usage counter for that topic.
+
+The initial database can be populated with over 120 curated clinical topics using `python seed_topics.py`.
+
+---
+
+## Global Settings (`settings.json`)
+
+Persistent global configuration is stored in `settings.json` and is editable through the `/settings` tab in the dashboard. The config structure contains:
+
+```json
+{
+  "assembly": {
+    "animations_enabled": true,
+    "animation_type": "ken_burns",
+    "transitions_enabled": true,
+    "transition_type": "crossfade",
+    "transition_duration": 0.2
+  },
+  "pipeline": {
+    "default_render_mode": "final",
+    "default_whisper_model": "large-v3"
+  }
+}
+```
+
+* **`assembly.animations_enabled`**: Toggle panning/zooming animations on static image clips (screenshots).
+* **`assembly.animation_type`**: Visual style for image overlays (`ken_burns` | `slide_in` | `zoom_punch` | `none`).
+* **`assembly.transitions_enabled`**: Enable overlap transition fades between video clips.
+* **`assembly.transition_type`**: Transition style (`crossfade` | `none`).
+* **`assembly.transition_duration`**: Duration of the overlap transition in seconds.
+* **`pipeline.default_render_mode`**: Select standard `final` resolution or fast `draft` mode.
+* **`pipeline.default_whisper_model`**: Default WhisperX model size for transcribing text.
+
+---
+
+## Aesthetics: Transitions, Animations & Subtitles
+
+Stage 5 assembly (`stage_5_assembly.py`) and `video_assembler.py` support high-quality visual features:
+
+### 1. Clip Transitions
+To prevent harsh cuts between B-roll segments, the pipeline supports **crossfade transitions**. 
+Because MoviePy's standard `.crossfadein()` and `.crossfadeout()` methods can suffer from rendering bugs when mixed across different clip types (e.g. `ImageClip` and `VideoFileClip`), the assembler implements a custom **`crossfade_concat`** matrix. It computes a custom frame-by-frame alpha blending function that overlays overlapping video track frames cleanly.
+
+### 2. Image Animations
+Screenshot figures or abstract pages are overlaid onto B-roll backgrounds. To make these static screenshots dynamic, the pipeline offers three animations:
+* **Ken Burns (`ken_burns`)**: Automatically generates a smooth 1.0x to 1.15x center pan/zoom. Because doing frame-by-frame rendering of high-res images in Python can be slow, this option triggers a sub-process call utilizing FFmpeg's hardware-accelerated `zoompan` filter, creating a temporary video clip before compositing.
+* **Slide In (`slide_in`)**: Translates the image onto the screen from the right side over 0.3s, holds, and slides out to the left.
+* **Zoom Punch (`zoom_punch`)**: Resizes the image from 95% to 105% scale over the course of its display duration using PIL resizing.
+
+### 3. Hindi (Devanagari) Subtitles
+Subtitles are generated in Hindi (Devanagari script). To support clean rendering and correct letter shaping:
+* **Font search**: The pipeline searches for system-installed Devanagari fonts (such as `Noto Sans Devanagari` or `Kohinoor Devanagari`).
+* **ASS Burn-in**: The primary pipeline transcribes text into ASS format in Stage 4d and burns it directly into the output video via an FFmpeg filter (`ass=filename=...`).
+* **PIL Caption Fallback**: If the system FFmpeg build does not contain the `libass` filter, the assembler automatically falls back to generating a series of transparent PNG caption overlays containing grouped, color-highlighted word phrases using PIL, placing them into a temp directory and compositing them as a MoviePy image track.
 
 ---
 
@@ -300,8 +407,8 @@ Stage 4d and the standalone `whisperx_transcriber.py` require two model download
 
 | Model ID | Type | Size | Use |
 |---|---|---|---|
-| `large-v2` | Transcription | ~3.1 GB | Recommended for production |
-| `large-v3` | Transcription | ~3.1 GB | Latest large model |
+| `large-v3` | Transcription | ~3.1 GB | Recommended for production (latest model) |
+| `large-v2` | Transcription | ~3.1 GB | Standard large model |
 | `medium` | Transcription | ~1.5 GB | Faster, slightly less accurate |
 | `small` | Transcription | ~0.5 GB | Dev/testing |
 | `align-hi` | Alignment | ~1.2 GB | Word-level timestamps in Hindi |
@@ -336,18 +443,19 @@ The `/clips` page in the dashboard provides the same functionality visually: sta
 
 | Field | What it controls |
 |---|---|
-| `research.topic_rotation` | Queue of PubMed search queries |
+| `research.topic_rotation` | Queue of PubMed search queries used if DB is empty |
+| `research.study_cooldown_days` | Number of days a selected study remains in cooldown (default: 30) |
 | `research.minimum_sample_size` | Studies below this N are rejected in Stage 2 |
 | `script.segment_structure` | The 6 segments every script must include |
 | `script.absolute_prohibitions` | Hard rules injected into every LLM prompt |
-| `script.target_duration_seconds` | Drives voiceover pacing |
-| `audio.sarvam_voice_id` | TTS voice used in Stage 4c |
+| `script.target_duration_seconds` | Drives voiceover pacing (currently 90s) |
+| `audio.sarvam_voice_id` | TTS voice used in Stage 4c (defaults to Bulbul Bulbul) |
 | `visuals.broll_mood_map` | Mood per segment for B-roll selection |
 | `thumbnail.style_variants` | The 3 thumbnail prompt styles Stage 3 must generate |
 | `compliance.medical_disclaimer` | Auto-prepended by Stage 5 |
 | `quality_gate` | Duration range + audio level thresholds checked in Stage 5 |
 
-To add a new topic: append a search query to `research.topic_rotation`. Nothing else needs changing.
+To add a new topic: Append a search query directly in the `/topics` UI dashboard, or run the CLI add command.
 
 ---
 
