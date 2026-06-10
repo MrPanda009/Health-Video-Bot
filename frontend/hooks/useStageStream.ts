@@ -7,7 +7,7 @@ import type { StageKey, StageStreamEvent } from '@/lib/types'
  * Merge an incoming chunk into the line buffer, honouring carriage returns.
  *
  * \r without a following \n means "go back to start of the current line" —
- * the standard trick used by tqdm, MoviePy's progress bar, and wget-style
+ * the standard trick used by tqdm, Remotion's render progress, and wget-style
  * downloaders to overwrite a single line in place.
  *
  * The buffer is an array of strings where every element except the last ends

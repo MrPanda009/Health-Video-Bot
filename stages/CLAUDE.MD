@@ -203,9 +203,10 @@ def _fmt_srt_time(seconds: float) -> str:
 ```
 
 ### Stage 5 without Stage 4d
-Stage 5 checks `assets.ass_path` — if absent, it skips caption burn-in and uses
-`duration_hint_seconds` from `content.script_segments` for clip timing. The video renders
-normally; only the SRT upload to YouTube (Stage 6) and the caption burn-in are affected.
+Stage 5 checks `assets.whisper_word_timestamps` — if empty, it skips the word-highlighted
+caption overlay and uses `duration_hint_seconds` from `content.script_segments` for segment
+timing. The video renders normally; only the caption overlay and the SRT upload to
+YouTube (Stage 6) are affected.
 
 ---
 
@@ -216,65 +217,66 @@ normally; only the SRT upload to YouTube (Stage 6) and the caption burn-in are a
 **Output:** `job["output"]["final_video_path"]`, `job["output"]["quality_checks"]`
 **Status:** `stage_5_complete`
 
-### Assembly engine: MoviePy 2.x
-Stage 5 uses **MoviePy 2.x** (not FFmpeg filter_complex). `pip install moviepy` is required;
-ffmpeg must be on PATH as MoviePy delegates encoding to it.
+### Assembly engine: Remotion
+Stage 5 uses **Remotion** (React-based video composition). No MoviePy. The Remotion project
+lives at `remotion/` in the project root and must be installed (`cd remotion && npm install`).
 
-**Key MoviePy v2 API used — never use v1 equivalents:**
-```python
-from moviepy import (
-    VideoFileClip, ImageClip, ColorClip,
-    AudioFileClip, concatenate_videoclips,
-    concatenate_audioclips, CompositeAudioClip,
-)
-clip.subclipped(t_start, t_end)  # not .subclip()
-clip.resized((w, h))             # not .resize()
-clip.cropped(x1=x1, y1=y1, x2=x2, y2=y2)  # not .crop()
-clip.with_audio(audio)           # not .set_audio()
-clip.with_fps(fps)               # not .set_fps()
-audio.with_volume_scaled(0.15)   # not .volumex()
+Stage 5 Python code builds a JSON props file and calls:
+```bash
+npx remotion render src/index.ts HealthVideoComposition output.mp4 --props=props.json
 ```
+
+All asset paths in props must be **absolute** paths; Remotion components prefix them with
+`file://` for rendering via headless Chrome.
 
 ### What it does
-Timeline built in order:
-1. `[optional intro.mp4]` — scale-crop to target resolution
-2. 3-second disclaimer card — `ImageClip` from Pillow-generated PNG
+Timeline driven by `HealthVideoComposition` in `remotion/src/`:
+1. `[optional intro.mp4]` — `<OffthreadVideo>` scale-to-fill via CSS `object-fit: cover`
+2. 3-second disclaimer card — React component with black background + white text
 3. Per segment from `content.script_segments`:
-   - `context` / `finding` segments → study screenshot (`ImageClip`) if available
-   - All other segments → B-roll from `broll_video_paths` (looped if too short, scale-cropped)
-   - Missing clips → black frame (`ColorClip`)
-4. `[optional outro.mp4]` — scale-crop to target resolution
+   - `context` segment → `<ScreenshotOverlay>` (screenshot + B-roll background)
+   - All other segments → `<BRollSegment>` (cycles clips, supports animations)
+   - Missing B-roll → black `<AbsoluteFill>`
+4. `[optional outro.mp4]`
 
-Audio chain:
-- Voiceover at 100%
-- Optional background music at 15% (`audio.with_volume_scaled(0.15)`)
-- Mixed with `CompositeAudioClip([voiceover, music])`
+Audio (across full duration):
+- `<Audio src={file://voiceoverPath} />` at 100%
+- `<Audio src={file://musicPath} volume={0.15} />` for background music
 
-ASS captions (if `assets.ass_path` exists from Stage 4d):
-- MoviePy cannot render ASS filters, so Stage 5 does a single FFmpeg post-pass:
-  ```python
-  run_ffmpeg(["ffmpeg", "-y", "-i", raw_path, "-vf", f"ass='{escaped}'", ..., output_path])
-  ```
-  The intermediate `video_raw.mp4` is deleted after burn-in.
+Overlaid across full duration:
+- `<CaptionOverlay>` — word-highlighted Devanagari captions from `whisper_word_timestamps`
+- `<SubscribeButton>` — animated red button (spring slide-up, last 7 s)
 
-### Scale-crop helper
-All clips are resized with scale-to-fill + center-crop — no letterboxing, no stretching:
+### Props built by Python (`build_remotion_props()`)
 ```python
-def _mp_scale_crop(clip, target_w, target_h):
-    import math
-    clip_w, clip_h = clip.size
-    scale = max(target_w / clip_w, target_h / clip_h)
-    new_w, new_h = math.ceil(clip_w * scale), math.ceil(clip_h * scale)
-    clip = clip.resized((new_w, new_h))
-    x1, y1 = (new_w - target_w) // 2, (new_h - target_h) // 2
-    return clip.cropped(x1=x1, y1=y1, x2=x1 + target_w, y2=y1 + target_h)
+{
+  "width": 1080, "height": 1920, "fps": 30,
+  "totalDurationInFrames": round(voiceover_duration * 30),
+  "disclaimerText": profile["compliance"]["medical_disclaimer"]["text_english"],
+  "segments": [
+    {
+      "name": seg_name,
+      "durationInFrames": proportional_frames,
+      "brollPaths": ["/abs/path/clip.mp4", ...],
+      "screenshotPath": "/abs/path/screenshot.png" or null,
+      "animationType": "ken_burns" | "slide_in" | "zoom_punch" | "none",
+      "brollCutIntervalFrames": 150,
+    }
+  ],
+  "voiceoverPath": "/abs/path/voiceover.wav",
+  "backgroundMusicPath": "/abs/path/music.mp3" or null,
+  "wordTimestamps": [{"word": str, "start": float, "end": float}, ...] or null,
+  "introPath": null, "outroPath": null,
+  "transitionsEnabled": false,
+  "transitionDurationFrames": 12,
+}
 ```
 
-### Quality gate (unchanged from original — uses ffprobe/volumedetect)
+### Quality gate (ffprobe/volumedetect — unchanged)
 ```python
 quality_checks = {
     "duration_in_range": bool,      # from niche_profile.quality_gate
-    "disclaimer_present": True,     # always true (included in assembly)
+    "disclaimer_present": True,     # always true (included in composition)
     "audio_peak_ok": bool,          # from volumedetect
     "audio_avg_ok": bool,           # from volumedetect
     "all_passed": bool,
@@ -326,7 +328,7 @@ Hindi stopword list is built-in (100+ tokens). Keyword extraction is entirely of
 Raises `FileNotFoundError` if the database does not exist yet (run Stage 4a first).
 
 ### `video_assembler.py`
-Overlays B-roll from an EDL onto a base A-roll video using MoviePy.
+Overlays B-roll from an EDL onto a base A-roll video using Remotion (`EDLComposition`).
 
 ```python
 from video_assembler import assemble, preview_edl
@@ -341,9 +343,10 @@ assemble(
 ```
 
 - B-roll fully replaces the video track at each window (no transparent overlay)
-- Base video audio is preserved throughout; B-roll audio is always stripped
-- Clips shorter than their window are looped; all clips are scale-cropped to match base resolution
+- Base video audio is preserved throughout; B-roll audio is always stripped (`volume={0}`)
+- Images get Ken Burns animation by default; videos loop to fill their window
 - Segments with `clip_path=null` or missing files show base video unchanged
+- Requires: `cd remotion && npm install`
 
 ### `stages/model_manager.py`
 CLI called by the frontend `/api/models` routes. Not a stage script.

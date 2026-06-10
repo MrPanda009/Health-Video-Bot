@@ -203,6 +203,24 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
             f"The script MUST mention this as a limitation in the caveat segment."
         )
 
+    # Below-minimum sample size — spoken disclaimer required at end of script
+    below_minimum_note = ""
+    below_minimum_reminder = ""
+    if claims.get("below_minimum_sample"):
+        n = claims.get("sample_size")
+        below_minimum_note = (
+            f"\n⚠ VERY SMALL STUDY (N={n}): This study is below the "
+            f"channel's minimum sample size of {profile['research']['minimum_sample_size']}. "
+            f"The CTA segment MUST end with a spoken Hindi disclaimer acknowledging the "
+            f"very small sample size and urging viewers to consult a doctor before acting."
+        )
+        below_minimum_reminder = (
+            f"\n8. MANDATORY (very small study, N={n}): The last sentence of the cta segment "
+            f"in hindi_script MUST be a spoken disclaimer in Hindi acknowledging that the "
+            f"study had only {n} participants and that viewers should consult their doctor "
+            f"before making any health decisions based on this video."
+        )
+
     # Industry funding disclosure
     funding_note = ""
     if claims.get("industry_funded_flag"):
@@ -275,7 +293,7 @@ ABSOLUTE PROHIBITIONS (never violate these):
 {chr(10).join('- ' + p for p in profile['script']['absolute_prohibitions'])}
 
 LANGUAGE RULE:
-{causal_rule}{small_study_note}{funding_note}
+{causal_rule}{small_study_note}{below_minimum_note}{funding_note}
 
 ═══════════════════════════════════════════════
 FORMAT REQUIREMENTS
@@ -417,7 +435,7 @@ IMPORTANT REMINDERS before you write:
 4. The sample size ({claims.get('sample_size') or 'unknown'}) must be mentioned somewhere in the script
 5. Thumbnail prompts must be in English (for image generation APIs)
 6. B-roll search terms must be in English (for Pexels/Pixabay)
-7. Title and description must be in Hindi (or bilingual for description)"""
+7. Title and description must be in Hindi (or bilingual for description){below_minimum_reminder}"""
 
 
 # ─── LLM call ─────────────────────────────────────────────────────────────────

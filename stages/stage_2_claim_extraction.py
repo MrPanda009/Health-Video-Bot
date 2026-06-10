@@ -394,13 +394,11 @@ def run(job_id: str) -> dict:
     # ── Apply safety flags (our logic, never LLM) ────────────────────────────
     claims = apply_safety_flags(claims, study, profile)
 
-    # ── Abort if sample size below minimum ───────────────────────────────────
+    # ── Warn if sample size below minimum (no longer aborts) ─────────────────
     if claims.below_minimum_sample:
-        return mark_error(
-            job,
-            f"Sample size N={claims.sample_size} is below minimum "
-            f"{profile['research']['minimum_sample_size']} — "
-            f"study too small for this channel. Select a different paper."
+        print(
+            f"[Stage 2] WARNING: Sample size N={claims.sample_size} is below minimum "
+            f"{profile['research']['minimum_sample_size']} — proceeding with disclaimer flag."
         )
 
     # ── Validation warnings ───────────────────────────────────────────────────

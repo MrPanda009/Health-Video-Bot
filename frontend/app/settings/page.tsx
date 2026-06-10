@@ -224,7 +224,7 @@ const ANIMATION_OPTIONS = [
   {
     value: 'ken_burns' as const,
     label: 'Ken Burns',
-    description: 'Slow zoom-in toward center (1.0× → 1.15×) via FFmpeg zoompan. Classic documentary look.',
+    description: 'Slow zoom-in toward center (1.0× → 1.15×) via Remotion interpolation. Classic documentary look.',
   },
   {
     value: 'slide_in' as const,
@@ -339,7 +339,7 @@ export default function SettingsPage() {
           <Section
             icon={Sparkles}
             title="Video Assembly"
-            description="Animations and transitions applied to B-roll clips by video_assembler.py"
+            description="Animations and transitions applied by Remotion in stage 5 and video_assembler.py"
           >
             {/* Animations toggle */}
             <SettingRow
@@ -518,23 +518,40 @@ export default function SettingsPage() {
           {/* ── CLI reference ─────────────────────────────────────────────────── */}
           <Section
             icon={Sliders}
-            title="Standalone Assembler"
-            description="These settings are passed as flags to video_assembler.py when using the CLI directly"
+            title="CLI Reference"
+            description="These settings are passed as flags to stage 5 and video_assembler.py (both use Remotion)"
           >
-            <div className="px-5 py-4">
-              <p className="mb-2 text-xs font-medium text-zinc-500 uppercase tracking-wide">
-                Equivalent CLI flags
-              </p>
-              <pre className="overflow-x-auto rounded-lg bg-zinc-950 px-4 py-3 font-mono text-xs leading-5 text-zinc-300">
-                <span className="text-zinc-500"># With current settings</span>
-                {'\n'}python video_assembler.py base.mp4 edl.json output.mp4 \
-                {'\n'}  {a.transitions_enabled
-                  ? `--transition-type ${a.transition_type} --transition-duration ${a.transition_duration.toFixed(2)}`
-                  : '--transition-type none'} \
-                {'\n'}  {a.animations_enabled
-                  ? `--animation-type ${a.animation_type}`
-                  : '--animation-type none'}
-              </pre>
+            <div className="px-5 py-4 space-y-4">
+              <div>
+                <p className="mb-2 text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                  Stage 5 (via dashboard or CLI)
+                </p>
+                <pre className="overflow-x-auto rounded-lg bg-zinc-950 px-4 py-3 font-mono text-xs leading-5 text-zinc-300">
+                  <span className="text-zinc-500"># With current settings</span>
+                  {'\n'}python stages/stage_5_assembly.py [job_id] \
+                  {'\n'}  {a.transitions_enabled
+                    ? `--transition-type ${a.transition_type} --transition-duration ${a.transition_duration.toFixed(2)}`
+                    : '--transition-type none'} \
+                  {'\n'}  {a.animations_enabled
+                    ? `--animation-type ${a.animation_type}`
+                    : '--animation-type none'}
+                </pre>
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-medium text-zinc-500 uppercase tracking-wide">
+                  Standalone EDL assembler
+                </p>
+                <pre className="overflow-x-auto rounded-lg bg-zinc-950 px-4 py-3 font-mono text-xs leading-5 text-zinc-300">
+                  <span className="text-zinc-500"># With current settings</span>
+                  {'\n'}python video_assembler.py base.mp4 edl.json output.mp4 \
+                  {'\n'}  {a.transitions_enabled
+                    ? `--transition-type ${a.transition_type} --transition-duration ${a.transition_duration.toFixed(2)}`
+                    : '--transition-type none'} \
+                  {'\n'}  {a.animations_enabled
+                    ? `--animation-type ${a.animation_type}`
+                    : '--animation-type none'}
+                </pre>
+              </div>
             </div>
           </Section>
 

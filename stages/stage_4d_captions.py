@@ -8,8 +8,9 @@ Transcribes the generated voiceover with WhisperX to produce:
 Does NOT change job status — the frontend API sets stage_4_complete after
 all Stage 4 sub-stages (4a, 4b, 4c, 4d) have completed.
 
-Stage 5 handles absence gracefully: if srt_path is None it falls back to
-duration_hint_seconds for timing and skips ASS caption burn-in.
+Stage 5 (Remotion) handles absence gracefully: if whisper_word_timestamps is
+empty it skips caption rendering; duration_hint_seconds are used for segment
+timing instead.
 
 Prerequisites
 -------------

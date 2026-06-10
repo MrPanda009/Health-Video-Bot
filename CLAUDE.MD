@@ -7,7 +7,7 @@ research, fully end-to-end: PubMed → script → assets → YouTube upload.
 
 A pipeline that takes a health research topic, finds a real peer-reviewed study on PubMed,
 extracts its claims with an LLM, generates a Hindi voiceover script + all YouTube metadata,
-downloads B-roll and generates thumbnails, assembles the video with MoviePy, and uploads it.
+downloads B-roll and generates thumbnails, assembles the video with Remotion, and uploads it.
 
 Target audience: Hindi-speaking adults (35-65) managing chronic conditions. Channel language: Hindi.
 
@@ -25,7 +25,7 @@ health_video_bot/
 ├── broll_db.py                      ← SQLite clip registry (dedup, LRU, integrity)
 ├── whisperx_transcriber.py          ← WhisperX transcription → word-level timestamps
 ├── edit_decision.py                 ← transcript + clip DB → EDL JSON
-├── video_assembler.py               ← EDL + base video → final video (MoviePy)
+├── video_assembler.py               ← EDL + base video → final video (Remotion)
 │
 ├── stages/
 │   ├── CLAUDE.md                    ← stage-specific context
@@ -52,6 +52,14 @@ health_video_bot/
 ├── cache/
 │   ├── broll/                       ← cached clips by search term
 │   └── broll_cache.db               ← SQLite clip registry
+├── remotion/                        ← Remotion video composition project
+│   ├── package.json
+│   ├── remotion.config.ts
+│   └── src/
+│       ├── index.ts                 ← composition registry
+│       ├── HealthVideoComposition.tsx  ← main stage 5 video
+│       ├── EDLComposition.tsx       ← standalone EDL assembler
+│       └── components/              ← DisclaimerCard, BRollSegment, CaptionOverlay, SubscribeButton
 └── frontend/                        ← Next.js dashboard
     └── app/
         ├── jobs/
@@ -96,13 +104,13 @@ created → stage_1_complete → stage_2_complete → stage_3_complete
 [Stage 4b] AI image generation → assets.thumbnail_paths
 [Stage 4c] Sarvam AI TTS → assets.voiceover_path
 [Stage 4d] WhisperX → word_timestamps.json + SRT → assets.srt_path, whisper_word_timestamps
-[Stage 5]  MoviePy assembly + quality gate → output.final_video_path
+[Stage 5]  Remotion assembly + quality gate → output.final_video_path
 [Stage 6]  YouTube Data API v3 upload → output.youtube_upload_id  ← TODO
 ```
 
 Stages 4a–4d can run in parallel. Stage 4d requires whisperx + downloaded models;
-Stage 5 handles its absence gracefully (uses `duration_hint_seconds` for timing, skips
-ASS caption burn-in).
+Stage 5 handles its absence gracefully (uses `duration_hint_seconds` for segment timing,
+skips word-highlighted caption overlay).
 
 ### Standalone editing pipeline (independent of job flow)
 ```
@@ -216,30 +224,34 @@ if __name__ == "__main__":
         job_id = sys.argv[1]
 ```
 
-### MoviePy v2 patterns (Stage 5 and video_assembler.py)
-Always import lazily inside functions so the module can be imported even when moviepy is
-not installed — fail at call time with a clear error message.
+### Remotion patterns (Stage 5 and video_assembler.py)
+Stage 5 and `video_assembler.py` both render via the Remotion CLI. Never use MoviePy.
 
 ```python
-# Scale-to-fill + center-crop (used in Stage 5 and video_assembler.py)
-def _mp_scale_crop(clip, target_w, target_h):
-    import math
-    clip_w, clip_h = clip.size
-    scale = max(target_w / clip_w, target_h / clip_h)
-    new_w, new_h = math.ceil(clip_w * scale), math.ceil(clip_h * scale)
-    clip = clip.resized((new_w, new_h))
-    x1, y1 = (new_w - target_w) // 2, (new_h - target_h) // 2
-    return clip.cropped(x1=x1, y1=y1, x2=x1 + target_w, y2=y1 + target_h)
+# Invoke Remotion render from Python (Stage 5 pattern)
+_REMOTION_DIR = Path(__file__).resolve().parent.parent / "remotion"
 
-# Key v2 API differences from v1:
-#   .subclipped()  not .subclip()
-#   .resized()     not .resize()
-#   .cropped()     not .crop()
-#   .with_audio()  not .set_audio()
-#   .with_fps()    not .set_fps()
-#   .with_volume_scaled()  not .volumex()
-#   VideoFileClip  not editor.VideoFileClip
+def render_with_remotion(props: dict, output_path: Path, props_file: Path) -> None:
+    props_file.write_text(json.dumps(props, ensure_ascii=False), encoding="utf-8")
+    cmd = [
+        "npx", "remotion", "render",
+        "src/index.ts",
+        "HealthVideoComposition",   # or "EDLComposition"
+        str(output_path.resolve()),
+        f"--props={props_file.resolve()}",
+        "--log=quiet",
+    ]
+    result = subprocess.run(cmd, cwd=str(_REMOTION_DIR), text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Remotion render failed (exit {result.returncode})")
 ```
+
+Key Remotion rules:
+- All asset paths in props must be **absolute** paths; components use `file://` prefix
+- `HealthVideoComposition` props are defined in `remotion/src/types.ts`
+- `EDLComposition` props are defined in `remotion/src/types.ts`
+- Remotion must be installed: `cd remotion && npm install`
+- Studio preview: `cd remotion && npx remotion studio src/index.ts`
 
 ---
 
@@ -289,19 +301,20 @@ def _mp_scale_crop(clip, target_w, target_h):
 - Transcribes `assets.voiceover_path` with WhisperX (Hindi, large-v2 by default)
 - Forced alignment produces word-level timestamps
 - Saves `assets/{job_id}/captions/word_timestamps.json` and `captions.srt`
-- Writes `job["assets"]["whisper_word_timestamps"]` and `job["assets"]["srt_path"]`
+- Writes `job["assets"]["whisper_word_timestamps"]`, `job["assets"]["srt_path"]`, `job["assets"]["ass_path"]`
 - If whisperx is not installed or model is not downloaded → marks job error with install instructions
 - Does NOT change job status
-- Stage 5 handles absence gracefully: skips caption burn-in, uses duration_hint_seconds for timing
+- Stage 5 handles absence gracefully: skips word-highlighted captions, uses duration_hint_seconds for timing
 
 ### Stage 5 — `stages/stage_5_assembly.py` ✅
-- Assembles video using **MoviePy 2.x** (replaced FFmpeg filter_complex pipeline)
+- Assembles video using **Remotion** (`npx remotion render HealthVideoComposition`)
 - Timeline: [optional intro] → 3s disclaimer card → B-roll/screenshots per segment → [optional outro]
-- Voiceover audio at 100%; optional background music mixed at 15% via CompositeAudioClip
-- Scale-to-fill + center-crop on all clips; loops B-roll shorter than its segment window
-- If `assets.ass_path` is set: single FFmpeg post-pass burns in ASS captions (MoviePy has no ASS filter)
+- Voiceover audio at 100%; optional background music at 15% via Remotion `<Audio volume={0.15} />`
+- Scale-to-fill + center-crop on all clips via CSS `object-fit: cover`; B-roll loops automatically
+- Word-highlighted captions from `whisper_word_timestamps` rendered natively in React (no FFmpeg)
+- Animated subscribe button (last 7 s) built in React — no `assets/subscribe.mp4` needed
 - Accepts `stage_4_complete` or `stage_3_complete` (dev mode with manually placed assets)
-- Quality gate: duration, audio levels via ffprobe/volumedetect — unchanged from before
+- Quality gate: duration, audio levels via ffprobe/volumedetect — unchanged
 - Sets `status: stage_5_complete`
 
 ### Standalone modules
@@ -320,10 +333,10 @@ def _mp_scale_crop(clip, target_w, target_h):
 
 **`video_assembler.py`**
 - `preview_edl(edl_path)` → prints time/clip/text summary to terminal
-- `assemble(base_video_path, edl_path, output_path)` → overlays B-roll on A-roll via MoviePy
+- `assemble(base_video_path, edl_path, output_path)` → overlays B-roll on A-roll via Remotion
   - B-roll clips fully replace video track (not transparent overlay); base audio always kept
-  - Clips shorter than their window are looped; all clips are scale-cropped to base resolution
-  - codec="libx264", audio_codec="aac"
+  - Images get Ken Burns animation by default; videos loop to fill their window
+  - Renders via `npx remotion render EDLComposition` — requires `cd remotion && npm install`
 
 **`stages/model_manager.py`**
 - `python stages/model_manager.py status` → JSON: all 5 known models + HuggingFace cache check
@@ -414,4 +427,4 @@ python stages/model_manager.py download align-hi
 5. **The medical disclaimer must appear** in every video (Stage 5 adds it, Stage 6 includes it in description).
 6. **All LLM calls must have a max of 2 retry attempts**, then abort via `mark_error()`.
 7. **Never use `datetime.utcnow()`** — use `datetime.now(timezone.utc)` instead.
-8. **MoviePy 2.x API only** — never use v1 method names (subclip, resize, crop, set_audio, volumex).
+8. **Video assembly uses Remotion only** — never use MoviePy in stage 5 or video_assembler.py. All rendering goes through `npx remotion render` in the `remotion/` project.

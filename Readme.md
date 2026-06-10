@@ -16,7 +16,7 @@ Automated Hindi health education video pipeline. Takes a PubMed health research 
 | 4b | `stages/stage_4b_thumbnail.py` | ✅ | AI thumbnail generation (DALL-E 3 or Vertex Imagen) |
 | 4c | `stages/stage_4c_voiceover.py` | ✅ | Sarvam AI Hindi TTS, chunk-splitting, WAV concatenation |
 | 4d | `stages/stage_4d_captions.py` | ✅ | WhisperX transcription → SRT/ASS captions + word-level timestamps (configurable model) |
-| 5 | `stages/stage_5_assembly.py` | ✅ | MoviePy assembly + visual transitions & pan/zoom animations + subtitle burn-in (with PIL overlay fallback for Devanagari text) + quality gate |
+| 5 | `stages/stage_5_assembly.py` | ✅ | Remotion assembly + visual transitions & pan/zoom animations + word-highlighted Devanagari captions + animated subscribe button + quality gate |
 | 6 | `stages/stage_6_upload.py` | 🔲 TODO | YouTube Data API v3 upload |
 
 **Supporting modules (project root):**
@@ -25,7 +25,7 @@ Automated Hindi health education video pipeline. Takes a PubMed health research 
 - `broll_db.py` — SQLite B-roll clip cache and registry (integrity check, deduplication, LRU reuse)
 - `whisperx_transcriber.py` — WhisperX-based audio transcription returning word-level timestamps
 - `edit_decision.py` — Generates an EDL JSON from a transcript and the B-roll clip database
-- `video_assembler.py` — Overlays B-roll from an EDL onto a base A-roll video using MoviePy with custom transitions/animations
+- `video_assembler.py` — Overlays B-roll from an EDL onto a base A-roll video using Remotion with custom transitions/animations
 - `niche_profile.json` — all editorial config; never hardcode values from it in stage scripts
 - `job_schema.json` — canonical shape of a job state object
 - `settings.json` — global persistent configuration settings (assembly & pipeline parameters)
@@ -62,7 +62,7 @@ health_video_bot/
 ├── broll_db.py                 # SQLite B-roll clip registry
 ├── whisperx_transcriber.py     # WhisperX transcription with word-level timestamps
 ├── edit_decision.py            # EDL generator: transcript → clip placements
-├── video_assembler.py          # MoviePy assembler: base video + EDL → final video
+├── video_assembler.py          # Remotion assembler: base video + EDL → final video
 ├── niche_profile.json          # Editorial DNA — all stages read this
 ├── job_schema.json             # Canonical job state schema
 ├── settings.json               # Global persistent config (read by frontend and stages)
@@ -77,7 +77,16 @@ health_video_bot/
 │   ├── stage_4b_thumbnail.py
 │   ├── stage_4c_voiceover.py
 │   ├── stage_4d_captions.py    # WhisperX → SRT/ASS + word-level timestamps
-│   └── stage_5_assembly.py     # MoviePy assembly + animations/transitions + quality gate
+│   └── stage_5_assembly.py     # Remotion assembly + animations/transitions + quality gate
+│
+├── remotion/                   # Remotion video composition project (React-based)
+│   ├── package.json
+│   ├── remotion.config.ts
+│   └── src/
+│       ├── index.ts            # Composition registry
+│       ├── HealthVideoComposition.tsx   # Stage 5 full-pipeline video
+│       ├── EDLComposition.tsx  # Standalone EDL assembler composition
+│       └── components/         # DisclaimerCard, BRollSegment, CaptionOverlay, SubscribeButton
 │
 ├── frontend/                   # Next.js dashboard
 │   ├── app/
@@ -132,7 +141,7 @@ health_video_bot/
 [Stage 4a] B-roll download   [Stage 4b] Thumbnails  [Stage 4c] TTS   [Stage 4d] Captions (model select)
                └──────────────────────┴───────────────────┴──────────────┘
                                → assets{}  (status → stage_4_complete)
-[Stage 5]  MoviePy assembly + transitions/animations + Devanagari caption burn-in → output/video.mp4
+[Stage 5]  Remotion assembly + transitions/animations + word-highlighted captions + animated subscribe button → output/video.mp4
 [Stage 6]  YouTube upload (TODO)
 ```
 
@@ -166,11 +175,11 @@ Every stage reads `jobs/{job_id}.json`, does its work, writes its output block b
 uv venv
 source .venv/bin/activate
 uv pip install biopython playwright requests openai anthropic \
-               pydub pillow python-dotenv moviepy numpy
+               pydub pillow python-dotenv numpy
 playwright install chromium
 ```
 
-FFmpeg must be installed at the system level (required by MoviePy, the quality gate, and caption burn-in):
+FFmpeg must be installed at the system level (required by the quality gate and ffprobe):
 ```bash
 brew install ffmpeg        # macOS
 sudo apt install ffmpeg    # Ubuntu/Debian
@@ -185,7 +194,21 @@ python stages/model_manager.py download large-v3
 python stages/model_manager.py download align-hi
 ```
 
-### 2. Frontend
+### 2. Remotion (video rendering)
+
+```bash
+cd remotion
+npm install
+```
+
+The first render will also download Chrome Headless Shell (~94 MB, one-time, cached automatically).
+
+To preview compositions in the browser:
+```bash
+cd remotion && npx remotion studio src/index.ts   # opens http://localhost:3000
+```
+
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -199,7 +222,7 @@ PIPELINE_ROOT=..
 PYTHON_BIN=../.venv/bin/python3
 ```
 
-### 3. Environment variables (`.env` at project root)
+### 4. Environment variables (`.env` at project root)
 
 ```env
 # LLM — pick one provider
@@ -233,7 +256,7 @@ ASSETS_DIR=assets
 CACHE_DIR=cache
 ```
 
-### 4. One-time manual setup
+### 5. One-time manual setup
 
 - [ ] Set `channel.youtube_channel_id` in `niche_profile.json`
 - [ ] Test Sarvam AI voices and set `audio.sarvam_voice_id` in `niche_profile.json`
@@ -381,23 +404,28 @@ Persistent global configuration is stored in `settings.json` and is editable thr
 
 ## Aesthetics: Transitions, Animations & Subtitles
 
-Stage 5 assembly (`stage_5_assembly.py`) and `video_assembler.py` support high-quality visual features:
+Stage 5 (`stage_5_assembly.py`) and `video_assembler.py` both use **Remotion** (React-based video composition) for all visual rendering. All animations and transitions are declarative React components — no MoviePy, no FFmpeg filter graphs.
 
 ### 1. Clip Transitions
-To prevent harsh cuts between B-roll segments, the pipeline supports **crossfade transitions**. 
-Because MoviePy's standard `.crossfadein()` and `.crossfadeout()` methods can suffer from rendering bugs when mixed across different clip types (e.g. `ImageClip` and `VideoFileClip`), the assembler implements a custom **`crossfade_concat`** matrix. It computes a custom frame-by-frame alpha blending function that overlays overlapping video track frames cleanly.
+Crossfade transitions between B-roll clips are handled natively in Remotion via CSS opacity interpolation across overlapping `<Sequence>` boundaries. Set `--transition-type crossfade` and `--transition-duration` to control the overlap.
 
 ### 2. Image Animations
-Screenshot figures or abstract pages are overlaid onto B-roll backgrounds. To make these static screenshots dynamic, the pipeline offers three animations:
-* **Ken Burns (`ken_burns`)**: Automatically generates a smooth 1.0x to 1.15x center pan/zoom. Because doing frame-by-frame rendering of high-res images in Python can be slow, this option triggers a sub-process call utilizing FFmpeg's hardware-accelerated `zoompan` filter, creating a temporary video clip before compositing.
-* **Slide In (`slide_in`)**: Translates the image onto the screen from the right side over 0.3s, holds, and slides out to the left.
-* **Zoom Punch (`zoom_punch`)**: Resizes the image from 95% to 105% scale over the course of its display duration using PIL resizing.
+Screenshot figures or still images in B-roll slots can be animated with one of three styles, all implemented as Remotion `interpolate()` transforms:
 
-### 3. Hindi (Devanagari) Subtitles
-Subtitles are generated in Hindi (Devanagari script). To support clean rendering and correct letter shaping:
-* **Font search**: The pipeline searches for system-installed Devanagari fonts (such as `Noto Sans Devanagari` or `Kohinoor Devanagari`).
-* **ASS Burn-in**: The primary pipeline transcribes text into ASS format in Stage 4d and burns it directly into the output video via an FFmpeg filter (`ass=filename=...`).
-* **PIL Caption Fallback**: If the system FFmpeg build does not contain the `libass` filter, the assembler automatically falls back to generating a series of transparent PNG caption overlays containing grouped, color-highlighted word phrases using PIL, placing them into a temp directory and compositing them as a MoviePy image track.
+* **Ken Burns (`ken_burns`)**: Smooth 1.0× → 1.15× center zoom over the clip duration via CSS `scale` interpolation.
+* **Slide In (`slide_in`)**: Translates the image onto the screen from the right over 0.3 s, holds, then exits left — driven by `translateX` interpolation.
+* **Zoom Punch (`zoom_punch`)**: Grows from 95% to 105% over the clip — a subtle energy effect via CSS `scale`.
+
+### 3. Hindi (Devanagari) Captions
+Word-highlighted captions are rendered natively in the browser engine (Remotion uses headless Chrome), which handles Devanagari shaping and ligatures correctly without any system font configuration:
+
+* **Word timestamps** from WhisperX (`whisper_word_timestamps`) are grouped into short phrase chunks (≤5 words per line).
+* The **currently spoken word** is highlighted in gold (`#FFD700`); remaining words in the chunk are white.
+* Text is positioned at the bottom 8% of the frame with a multi-directional text shadow for legibility on any background.
+* No ASS burn-in, no PIL rendering, no ffmpeg libass dependency.
+
+### 4. Animated Subscribe Button
+The subscribe call-to-action appears in the last 7 seconds of every video as a pure React component — no `assets/subscribe.mp4` file required. It enters with a spring animation (slide up from bottom) and features a pulsing bell icon.
 
 ---
 
@@ -413,7 +441,7 @@ Stage 4d and the standalone `whisperx_transcriber.py` require two model download
 | `small` | Transcription | ~0.5 GB | Dev/testing |
 | `align-hi` | Alignment | ~1.2 GB | Word-level timestamps in Hindi |
 
-If a model isn't downloaded, Stage 4d prints a clear error message pointing to the Models dashboard. Stage 5 handles the absence of Stage 4d output gracefully (no captions, timing from `duration_hint_seconds`).
+If a model isn't downloaded, Stage 4d prints a clear error message pointing to the Models dashboard. Stage 5 (Remotion) handles the absence of Stage 4d output gracefully — caption overlay is skipped and segment timing falls back to `duration_hint_seconds`.
 
 ---
 

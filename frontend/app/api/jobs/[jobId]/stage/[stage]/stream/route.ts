@@ -89,18 +89,37 @@ export async function GET(
         env: { ...process.env, PYTHONUNBUFFERED: '1' },
       })
 
-      // Register stdin so the /stdin relay endpoint can write to it
-      if (stage === 'stage_1' && proc.stdin) {
+      // Register stdin for all stages so any interactive prompt can receive input
+      if (proc.stdin) {
         activeStdin.set(jobId, proc.stdin)
         proc.on('close', () => activeStdin.delete(jobId))
       }
 
+      const INPUT_PATTERNS = [
+        /select a study/i,
+        /press enter/i,
+        /press any key/i,
+        /enter your/i,
+        /\?\s*$/m,           // lines ending with "?"
+        /:\s*$/m,            // lines ending with ":"
+      ]
+
+      // Track prompt state: after stdin is written the flag resets so a next prompt is detected
       let awaitingInputSent = false
+      const origStdin = proc.stdin
+      if (origStdin) {
+        const origWrite = origStdin.write.bind(origStdin)
+        // @ts-expect-error wrapping write to reset detection flag after input is sent
+        origStdin.write = (...args: Parameters<typeof origWrite>) => {
+          awaitingInputSent = false
+          return origWrite(...args)
+        }
+      }
+
       proc.stdout.on('data', (chunk: Buffer) => {
         const text = chunk.toString()
         send({ type: 'stdout', data: text })
-        // Detect the study-selection prompt and notify the client
-        if (!awaitingInputSent && text.includes('Select a study')) {
+        if (!awaitingInputSent && INPUT_PATTERNS.some((p) => p.test(text))) {
           awaitingInputSent = true
           send({ type: 'awaiting_input', data: '' })
         }

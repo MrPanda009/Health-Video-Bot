@@ -23,6 +23,7 @@ interface PipelineTimelineProps {
 export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams }: PipelineTimelineProps) {
   const stream = useStageStream(job.job_id)
   const [customPmid, setCustomPmid] = useState('')
+  const [genericInput, setGenericInput] = useState('')
 
   const handleRun = useCallback(
     async (key: StageKey, params?: StreamParams) => {
@@ -152,6 +153,45 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
               Clear
             </button>
           </div>
+
+          {/* Generic input — shown when any stage other than stage_1 is waiting */}
+          {stream.awaitingInput && stream.activeStage !== 'stage_1' && (
+            <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+              <p className="mb-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+                Process is waiting for input:
+              </p>
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  stream.sendInput(genericInput)
+                  setGenericInput('')
+                }}
+              >
+                <input
+                  autoFocus
+                  type="text"
+                  value={genericInput}
+                  onChange={(e) => setGenericInput(e.target.value)}
+                  placeholder="Type response and press Enter…"
+                  className="flex-1 rounded border border-amber-300 bg-white px-2 py-1.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none dark:border-amber-700 dark:bg-zinc-900 dark:text-zinc-100"
+                />
+                <button
+                  type="submit"
+                  className="rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+                >
+                  Send
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { stream.sendInput(''); setGenericInput('') }}
+                  className="rounded border border-amber-300 px-3 py-1.5 text-xs text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-400 dark:hover:bg-amber-900"
+                >
+                  ↵ Enter
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* Study selector — shown when stage 1 is waiting for a choice */}
           {stream.awaitingInput && stream.activeStage === 'stage_1' && (
