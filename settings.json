@@ -1,0 +1,13 @@
+{
+  "assembly": {
+    "animations_enabled": true,
+    "animation_type": "ken_burns",
+    "transitions_enabled": true,
+    "transition_type": "crossfade",
+    "transition_duration": 0.2
+  },
+  "pipeline": {
+    "default_render_mode": "final",
+    "default_whisper_model": "large-v3"
+  }
+}

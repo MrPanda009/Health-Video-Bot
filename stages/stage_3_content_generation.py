@@ -215,7 +215,7 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
     default_tags = profile["youtube_upload"]["default_tags_always_include"]
     tags_instruction = profile["youtube_upload"].get("tags_instruction", "")
 
-    # Study citation for description
+    # Study citation + link for description
     authors = study.get("authors", [])
     authors_str = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
     citation = profile["compliance"]["study_citation_format"].format(
@@ -225,6 +225,9 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
         journal=study.get("journal", ""),
         doi_or_pmid=study.get("doi") or f"PMID: {study.get('pmid', '')}"
     )
+    doi = study.get("doi")
+    pmid = study.get("pmid", "")
+    study_url = f"https://doi.org/{doi}" if doi else f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
 
     # Disclaimer texts
     disclaimer_hindi   = profile["compliance"]["medical_disclaimer"]["text_hindi"]
@@ -351,7 +354,7 @@ The JSON must match this exact structure:
 
   "title": "Hindi YouTube title, under 60 characters",
 
-  "description": "Full YouTube description in Hindi and English. Must include:\\n1. 2-line video summary\\n2. Study citation: {citation}\\n3. Medical disclaimer: {disclaimer_hindi} | {disclaimer_english}\\n4. AI disclosure: {ai_disclosure}\\n5. Subscribe CTA",
+  "description": "Full YouTube description in Hindi and English. Must include:\\n1. 2-line video summary\\n2. Study citation: {citation}\\n3. Study link: {study_url}\\n4. Medical disclaimer: {disclaimer_hindi} | {disclaimer_english}\\n5. AI disclosure: {ai_disclosure}\\n6. Subscribe CTA",
 
   "tags": ["...25-35 tags total: see TAG RULES below..."],
 

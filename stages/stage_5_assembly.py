@@ -34,9 +34,12 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -204,6 +207,155 @@ def volumedetect(path: Path) -> dict[str, float]:
         if m:
             out[key] = float(m.group(1))
     return out
+
+
+# ─── Animation & transition helpers ──────────────────────────────────────────
+
+_ANIM_TEMP_DIR = Path(tempfile.gettempdir()) / "stage5_anim_temp"
+
+
+def _anim_ken_burns(image_path: str, duration: float,
+                    target_w: int, target_h: int):
+    """Zoom 1.0 → 1.15 via FFmpeg zoompan. Returns a VideoFileClip from a temp file."""
+    from moviepy import VideoFileClip
+
+    _ANIM_TEMP_DIR.mkdir(parents=True, exist_ok=True)
+    out = str(_ANIM_TEMP_DIR / f"{uuid.uuid4().hex}.mp4")
+    fps = 25
+    n = max(1, round(duration * fps))
+    zoom_expr = f"'1+(0.15*on/{n})'"
+    run_ffmpeg([
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", image_path,
+        "-vf", (
+            f"zoompan=z={zoom_expr}"
+            f":x=iw/2-(iw/zoom/2):y=ih/2-(ih/zoom/2)"
+            f":d={n}:s={target_w}x{target_h}:fps={fps}"
+        ),
+        "-t", str(duration),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        out,
+    ])
+    return VideoFileClip(out)
+
+
+def _anim_slide_in(clip, target_w: int, duration: float):
+    """Slide in from right (0.3 s), hold, slide out left (0.3 s)."""
+    slide_t = min(0.3, duration / 4)
+
+    def _pos(t):
+        if t < slide_t:
+            return (target_w * (1 - t / slide_t), 0)
+        if t > duration - slide_t:
+            return (-target_w * ((t - (duration - slide_t)) / slide_t), 0)
+        return (0, 0)
+
+    return clip.with_position(_pos)
+
+
+def _anim_zoom_punch(clip, duration: float):
+    """Grow from 95 % to 105 % over the clip duration, frame-by-frame via PIL."""
+    import numpy as np
+    h, w = clip.size[1], clip.size[0]
+
+    def _frame(get_frame, t):
+        frame = get_frame(t)
+        scale = 0.95 + 0.10 * (t / max(duration, 0.001))
+        new_w, new_h = int(w * scale), int(h * scale)
+        from PIL import Image as PILImage
+        img = PILImage.fromarray(frame).resize((new_w, new_h), PILImage.LANCZOS)
+        arr = np.array(img)
+        y1 = max(0, (new_h - h) // 2)
+        x1 = max(0, (new_w - w) // 2)
+        arr = arr[y1:y1 + h, x1:x1 + w]
+        if arr.shape[0] < h or arr.shape[1] < w:
+            pad = np.zeros((h, w, arr.shape[2]), dtype=arr.dtype)
+            pad[:arr.shape[0], :arr.shape[1]] = arr
+            arr = pad
+        return arr
+
+    return clip.fl(_frame)
+
+
+def animate_image_clip(clip, image_path: str, duration: float,
+                       animation_type: str, video_w: int, video_h: int):
+    """
+    Apply animation to an ImageClip.
+
+    For 'ken_burns': ignores *clip* and rebuilds from *image_path* via FFmpeg.
+    For 'slide_in' / 'zoom_punch': transforms *clip* in-place.
+    Returns the (possibly replaced) clip.
+    """
+    if animation_type == "ken_burns":
+        try:
+            return _anim_ken_burns(image_path, duration, video_w, video_h)
+        except Exception as e:
+            print(f"[Stage 5]   ⚠ ken_burns failed ({e}) — using static image")
+            return clip
+    if animation_type == "slide_in":
+        return _anim_slide_in(clip, video_w, duration)
+    if animation_type == "zoom_punch":
+        return _anim_zoom_punch(clip, duration)
+    return clip
+
+
+def crossfade_concat(clips: list, fade_dur: float):
+    """
+    Concatenate clips with crossfade transitions.
+
+    Uses a single VideoClip with a custom make_frame that calls get_frame()
+    directly on each source clip — the only API guaranteed on every MoviePy
+    clip type (ImageClip, VideoFileClip, CompositeVideoClip).
+    fl(), crossfadein(), crossfadeout() are all absent on ImageClip in v2.
+    """
+    import numpy as np
+    from moviepy import VideoClip, concatenate_videoclips
+
+    if len(clips) <= 1 or fade_dur <= 0:
+        return concatenate_videoclips(clips)
+
+    # Per-transition fade duration capped at 1/4 of each neighbouring clip
+    fades: list[float] = []
+    for i in range(len(clips) - 1):
+        fades.append(min(fade_dur, clips[i].duration / 4, clips[i + 1].duration / 4))
+
+    # Clip start times (each overlaps the previous by its fade duration)
+    starts: list[float] = [0.0]
+    for i in range(len(clips) - 1):
+        starts.append(starts[-1] + clips[i].duration - fades[i])
+
+    total_dur = starts[-1] + clips[-1].duration
+    w, h = clips[0].size
+    fps = max((getattr(c, "fps", None) or FPS) for c in clips)
+
+    def make_frame(t):
+        result: np.ndarray | None = None
+        for i, clip in enumerate(clips):
+            cs = starts[i]
+            local_t = t - cs
+            if local_t < 0 or local_t >= clip.duration:
+                continue
+
+            f = clip.get_frame(local_t).astype(np.float32)
+            alpha = 1.0
+
+            # Fade in over the first `fades[i-1]` seconds of this clip
+            if i > 0 and local_t < fades[i - 1]:
+                alpha *= local_t / fades[i - 1]
+
+            # Fade out over the last `fades[i]` seconds of this clip
+            if i < len(clips) - 1:
+                remaining = clip.duration - local_t
+                if remaining < fades[i]:
+                    alpha *= remaining / fades[i]
+
+            result = f * alpha if result is None else result + f * alpha
+
+        if result is None:
+            return np.zeros((h, w, 3), dtype=np.uint8)
+        return result.clip(0, 255).astype(np.uint8)
+
+    return VideoClip(make_frame=make_frame, duration=total_dur).with_fps(fps)
 
 
 # ─── Disclaimer card ──────────────────────────────────────────────────────────
@@ -506,7 +658,10 @@ def _build_broll_segment(paths: list[str], duration: float,
     return concatenate_videoclips(chunks)
 
 
-def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False) -> Path:
+def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False,
+                   animation_type: str = "none",
+                   transitions_enabled: bool = False,
+                   transition_duration: float = 0.4) -> Path:
     """
     Assemble the final video using MoviePy.
 
@@ -636,16 +791,30 @@ def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False)
 
             # Scale screenshot to 60% of video width, keep aspect ratio
             ss_target_w = int(video_w * 0.60)
-            ss_img = ImageClip(str(screenshot_paths[0]), duration=ss_display).with_fps(FPS)
-            ss_w, ss_h = ss_img.size
-            ss_target_h = int(ss_h * (ss_target_w / ss_w))
-            ss_img = ss_img.resized((ss_target_w, ss_target_h))
-            ss_x = (video_w - ss_target_w) // 2
-            ss_y = (video_h - ss_target_h) // 2
-            ss_img = ss_img.with_position((ss_x, ss_y))
+            ss_path_str = str(screenshot_paths[0])
 
-            # Composite: B-roll plays the whole segment; screenshot overlays first 3s only
-            clip = CompositeVideoClip([bg, ss_img], size=(video_w, video_h))
+            if animation_type == "ken_burns":
+                # Ken Burns fills the whole frame — no bg needed; run on full target size
+                ss_img = animate_image_clip(
+                    None, ss_path_str, ss_display,
+                    "ken_burns", video_w, video_h,
+                )
+                ss_img = ss_img.with_fps(FPS)
+                clip = CompositeVideoClip([bg, ss_img], size=(video_w, video_h))
+            else:
+                ss_img = ImageClip(ss_path_str, duration=ss_display).with_fps(FPS)
+                ss_w, ss_h = ss_img.size
+                ss_target_h = int(ss_h * (ss_target_w / ss_w))
+                ss_img = ss_img.resized((ss_target_w, ss_target_h))
+                if animation_type in ("slide_in", "zoom_punch"):
+                    ss_img = animate_image_clip(
+                        ss_img, ss_path_str, ss_display,
+                        animation_type, ss_target_w, ss_target_h,
+                    )
+                ss_x = (video_w - ss_target_w) // 2
+                ss_y = (video_h - ss_target_h) // 2
+                ss_img = ss_img.with_position((ss_x, ss_y))
+                clip = CompositeVideoClip([bg, ss_img], size=(video_w, video_h))
 
             print(f"[Stage 5]   {name}: screenshot overlay {ss_display}s over b-roll ({duration}s total)")
         else:
@@ -683,8 +852,13 @@ def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False)
         print("[Stage 5]   Found outro.mp4 — appending")
 
     # ── Concatenate video track ───────────────────────────────────────────────
-    print(f"\n[Stage 5] Concatenating {len(video_parts)} clip(s)…")
-    video_track = concatenate_videoclips(video_parts)
+    print(f"\n[Stage 5] Concatenating {len(video_parts)} clip(s)"
+          + (f" with {transition_duration}s crossfades…" if transitions_enabled else "…"))
+    video_track = (
+        crossfade_concat(video_parts, transition_duration)
+        if transitions_enabled
+        else concatenate_videoclips(video_parts)
+    )
 
     # ── Audio chain ───────────────────────────────────────────────────────────
     # Load voiceover first — its duration is the authoritative timeline length.
@@ -775,6 +949,8 @@ def assemble_video(job: dict, profile: dict, out_dir: Path, draft: bool = False)
             clip.close()
         except Exception:
             pass
+    if _ANIM_TEMP_DIR.exists():
+        shutil.rmtree(_ANIM_TEMP_DIR, ignore_errors=True)
             
     # Cleanup temp captions directory
     if temp_captions_dir.exists():
@@ -862,7 +1038,10 @@ def run_quality_gate(output_path: Path, profile: dict) -> dict:
 
 # ─── Main runner ──────────────────────────────────────────────────────────────
 
-def run(job_id: str, draft: bool = False) -> dict:
+def run(job_id: str, draft: bool = False,
+        animation_type: str = "none",
+        transitions_enabled: bool = False,
+        transition_duration: float = 0.4) -> dict:
     """
     Main Stage 5 runner.
 
@@ -913,8 +1092,16 @@ def run(job_id: str, draft: bool = False) -> dict:
     # ── Assemble ─────────────────────────────────────────────────────────────
     out_dir = Path(ASSETS_DIR) / job_id / "output"
     print(f"[Stage 5] Assembling video for job {job_id}" + (" [DRAFT]" if draft else ""))
+    anim_label = animation_type if animation_type != "none" else "none"
+    trans_label = f"crossfade {transition_duration}s" if transitions_enabled else "none"
+    print(f"[Stage 5] animation={anim_label}  transitions={trans_label}")
     try:
-        output_path = assemble_video(job, profile, out_dir, draft=draft)
+        output_path = assemble_video(
+            job, profile, out_dir, draft=draft,
+            animation_type=animation_type,
+            transitions_enabled=transitions_enabled,
+            transition_duration=transition_duration,
+        )
     except FileNotFoundError as e:
         return mark_error(job, str(e))
     except RuntimeError as e:
@@ -955,15 +1142,33 @@ def run(job_id: str, draft: bool = False) -> dict:
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Usage:
-    #   python stage_5_assembly.py <job_id> [--draft]
-    #   python stage_5_assembly.py [--draft]   ← auto-picks most recent eligible job
+    import argparse
 
-    args = sys.argv[1:]
-    draft_mode = "--draft" in args
-    positional = [a for a in args if not a.startswith("--")]
+    parser = argparse.ArgumentParser(description="Stage 5 — video assembly")
+    parser.add_argument("job_id", nargs="?", help="Job ID (auto-picks latest if omitted)")
+    parser.add_argument("--draft", action="store_true", help="Half-resolution fast encode")
+    parser.add_argument(
+        "--animation-type", default="none",
+        choices=["ken_burns", "slide_in", "zoom_punch", "none"],
+        help="Animation for image/screenshot clips (default: none)",
+    )
+    parser.add_argument(
+        "--transition-type", default="none",
+        choices=["crossfade", "none"],
+        help="Transition between clips (default: none)",
+    )
+    parser.add_argument(
+        "--transition-duration", type=float, default=0.4,
+        help="Crossfade duration in seconds (default: 0.4)",
+    )
+    parsed = parser.parse_args()
 
-    if not positional:
+    draft_mode = parsed.draft
+    animation_type = parsed.animation_type
+    transitions_enabled = parsed.transition_type == "crossfade"
+    transition_duration = parsed.transition_duration
+
+    if not parsed.job_id:
         jobs_dir   = Path(JOBS_DIR)
         candidates = []
         for jf in jobs_dir.glob("*.json"):
@@ -988,9 +1193,14 @@ if __name__ == "__main__":
         label = "retrying errored" if picked_status == "error" else "most recent"
         print(f"[Stage 5] No job_id provided — using {label}: {job_id}")
     else:
-        job_id = positional[0]
+        job_id = parsed.job_id
 
-    result = run(job_id, draft=draft_mode)
+    result = run(
+        job_id, draft=draft_mode,
+        animation_type=animation_type,
+        transitions_enabled=transitions_enabled,
+        transition_duration=transition_duration,
+    )
     print(f"\nFinal status : {result['status']}")
     if result.get("error"):
         print(f"Error        : {result['error']['message']}")

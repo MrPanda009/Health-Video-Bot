@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,8 +15,6 @@ import { useModels } from '@/hooks/useModels'
 import type { ModelInfo } from '@/hooks/useModels'
 import { TerminalOutput } from '@/components/terminal/TerminalOutput'
 import type { StageStreamEvent } from '@/lib/types'
-
-const STORAGE_KEY = 'whisper_selected_model'
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -54,13 +52,11 @@ function ModelCard({
   onDownload,
   isDownloading,
   whisperxInstalled,
-  isSelected,
 }: {
   model: ModelInfo
   onDownload: (id: string) => void
   isDownloading: boolean
   whisperxInstalled: boolean
-  isSelected?: boolean
 }) {
   const canDownload = whisperxInstalled && !model.downloaded && !isDownloading
 
@@ -68,9 +64,7 @@ function ModelCard({
     <div
       className={[
         'flex items-start justify-between gap-4 rounded-xl border p-4 transition-colors',
-        isSelected
-          ? 'border-blue-300 bg-blue-50 dark:border-blue-700/60 dark:bg-blue-950/20'
-          : model.downloaded
+        model.downloaded
           ? 'border-green-200 bg-green-50 dark:border-green-900/60 dark:bg-green-950/20'
           : 'border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900',
       ].join(' ')}
@@ -85,11 +79,6 @@ function ModelCard({
             </span>
           )}
           <DownloadedBadge downloaded={model.downloaded} />
-          {isSelected && (
-            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-              In use
-            </span>
-          )}
         </div>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">{model.description}</p>
         <p className="font-mono text-xs text-zinc-400 dark:text-zinc-600">{model.hf_repo}</p>
@@ -138,26 +127,11 @@ export default function ModelsPage() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [terminalLines, setTerminalLines] = useState<string[]>([])
   const [terminalExitCode, setTerminalExitCode] = useState<number | null>(null)
-  const esRef = useRef<EventSource | null>(null)
-  const [selectedModel, setSelectedModel] = useState<string>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem(STORAGE_KEY) ?? 'large-v2'
-    }
-    return 'large-v2'
-  })
-
-  function handleModelSelect(id: string) {
-    setSelectedModel(id)
-    localStorage.setItem(STORAGE_KEY, id)
-  }
-
   const transcriptionModels = models.filter((m) => m.type === 'transcription')
   const alignmentModels = models.filter((m) => m.type === 'alignment')
 
   const handleDownload = useCallback(
     async (modelId: string) => {
-      // Close any in-flight download
-      esRef.current?.close()
       setDownloadingId(modelId)
       setTerminalLines([])
       setTerminalExitCode(null)
@@ -253,37 +227,6 @@ export default function ModelsPage() {
           </button>
         </div>
 
-        {/* Active transcription model selector */}
-        <div className="mb-6 rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-                Active transcription model
-              </p>
-              <p className="mt-0.5 text-xs text-zinc-500">
-                Used by Stage 4d (captions) when run from the dashboard.
-              </p>
-            </div>
-            <select
-              value={selectedModel}
-              onChange={(e) => handleModelSelect(e.target.value)}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            >
-              {isLoading ? (
-                <option value="large-v2">large-v2 (default)</option>
-              ) : transcriptionModels.length > 0 ? (
-                transcriptionModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}{m.downloaded ? '' : ' (not downloaded)'}
-                  </option>
-                ))
-              ) : (
-                <option value="large-v2">large-v2 (default)</option>
-              )}
-            </select>
-          </div>
-        </div>
-
         {/* whisperx installation status */}
         <div
           className={[
@@ -344,7 +287,6 @@ export default function ModelsPage() {
                   onDownload={handleDownload}
                   isDownloading={downloadingId === m.id}
                   whisperxInstalled={whisperxInstalled}
-                  isSelected={m.id === selectedModel}
                 />
               ))}
             </div>

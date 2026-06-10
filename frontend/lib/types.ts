@@ -208,3 +208,23 @@ export interface ClipStats {
   unique_projects: number
   total_duration_sec: number
 }
+
+// ─── App settings ─────────────────────────────────────────────────────────────
+
+export interface AssemblySettings {
+  animations_enabled: boolean
+  animation_type: 'ken_burns' | 'slide_in' | 'zoom_punch'
+  transitions_enabled: boolean
+  transition_type: 'crossfade'
+  transition_duration: number
+}
+
+export interface PipelineSettings {
+  default_render_mode: 'draft' | 'final'
+  default_whisper_model: string
+}
+
+export interface AppSettings {
+  assembly: AssemblySettings
+  pipeline: PipelineSettings
+}

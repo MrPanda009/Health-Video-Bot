@@ -3,6 +3,7 @@ import fs from 'fs'
 import { spawn } from 'child_process'
 import { STAGES } from '@/lib/pipeline-config'
 import { activeStdin } from '@/lib/active-processes'
+import { readSettings } from '@/app/api/settings/route'
 import type { StageStreamEvent } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -38,7 +39,7 @@ export async function GET(
   const scriptPath = path.join(PIPELINE_ROOT, stageDef.script)
   const pythonBin = resolvePython()
 
-  // Read render_mode from job to decide whether to pass --draft to stage 5
+  // Read render_mode from job and global settings to build stage 5 args
   let renderMode: string | undefined
   if (stage === 'stage_5') {
     try {
@@ -49,16 +50,27 @@ export async function GET(
 
   // Stage 1: topic, pmid, '' (aspect_ratio default), jobId as pre_created_job_id
   // Stage 4d: jobId [--model <modelId>]
-  // Stage 5: jobId [--draft]
+  // Stage 5: jobId [--draft] [--transition-type X] [--animation-type X] [--transition-duration X]
   // All other stages: jobId only
-  const args =
-    stage === 'stage_1'
-      ? [scriptPath, topic, pmid, '', jobId]
-      : stage === 'stage_4d' && whisperModel
-        ? [scriptPath, jobId, '--model', whisperModel]
-        : stage === 'stage_5' && renderMode === 'draft'
-          ? [scriptPath, jobId, '--draft']
-          : [scriptPath, jobId]
+  let args: string[]
+  if (stage === 'stage_1') {
+    args = [scriptPath, topic, pmid, '', jobId]
+  } else if (stage === 'stage_4d') {
+    // whisperModel query param takes precedence; fall back to settings.json
+    const model = whisperModel || readSettings().pipeline.default_whisper_model
+    args = [scriptPath, jobId, '--model', model]
+  } else if (stage === 'stage_5') {
+    args = [scriptPath, jobId]
+    if (renderMode === 'draft') args.push('--draft')
+    // Pass assembly settings so stage_5_assembly.py can forward them to video_assembler
+    const settings = readSettings()
+    const asm = settings.assembly
+    args.push('--transition-type', asm.transitions_enabled ? asm.transition_type : 'none')
+    args.push('--animation-type', asm.animations_enabled ? asm.animation_type : 'none')
+    args.push('--transition-duration', String(asm.transition_duration))
+  } else {
+    args = [scriptPath, jobId]
+  }
 
   const encoder = new TextEncoder()
 
