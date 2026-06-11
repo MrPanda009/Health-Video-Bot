@@ -50,7 +50,9 @@ CACHE_DIR          = os.getenv("CACHE_DIR", "cache")
 PEXELS_API_KEY  = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
 
-CLIPS_PER_SEGMENT = 2   # target clips per segment — Stage 5 picks the better one
+# Clips per segment scale with segment duration.
+# Short segments loop a single clip fine; longer ones benefit from variety.
+_CLIPS_DURATION_THRESHOLD = 15  # seconds — segments above this get 2 clips, below get 1
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -260,7 +262,7 @@ def run(job_id: str) -> dict:
     """
     Main Stage 4a runner.
 
-    Iterates over broll_search_tags, collects CLIPS_PER_SEGMENT clips per segment
+    Iterates over broll_search_tags, collects 1–2 clips per segment (scaled to
     using cache → Pexels → Pixabay, and writes the result into job assets{}.
 
     Never aborts on per-segment failures — missing segments are recorded so
@@ -295,6 +297,12 @@ def run(job_id: str) -> dict:
     broll_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Build duration map from script_segments so clip count scales with segment length.
+    seg_durations: dict[str, int] = {
+        s["name"]: int(s.get("duration_hint_seconds", _CLIPS_DURATION_THRESHOLD))
+        for s in job.get("content", {}).get("script_segments", [])
+    }
+
     db = ClipDB()
 
     broll_video_paths: list[dict] = []
@@ -305,10 +313,13 @@ def run(job_id: str) -> dict:
         search_terms = segment["search_terms"]
         collected:   list[str] = []
 
-        print(f"\n[Stage 4a] Segment '{seg_name}' — terms: {search_terms}")
+        seg_duration   = seg_durations.get(seg_name, _CLIPS_DURATION_THRESHOLD)
+        clips_needed   = 1 if seg_duration <= _CLIPS_DURATION_THRESHOLD else 2
+
+        print(f"\n[Stage 4a] Segment '{seg_name}' ({seg_duration}s → {clips_needed} clip(s)) — terms: {search_terms}")
 
         for search_term in search_terms:
-            if len(collected) >= CLIPS_PER_SEGMENT:
+            if len(collected) >= clips_needed:
                 break
 
             slug   = _slug(search_term)
@@ -355,7 +366,7 @@ def run(job_id: str) -> dict:
             print(f"[Stage 4a]   Pexels  '{search_term}': {len(clips)} result(s)")
 
             # ── Pixabay fallback when Pexels didn't fill the quota ────────
-            if len(clips) < CLIPS_PER_SEGMENT:
+            if len(clips) < clips_needed:
                 time.sleep(0.4)  # polite gap between providers
                 pb_clips = fetch_from_pixabay(search_term, min_duration)
                 print(f"[Stage 4a]   Pixabay '{search_term}': {len(pb_clips)} result(s)")
@@ -363,7 +374,7 @@ def run(job_id: str) -> dict:
 
             # ── Download to cache first, then copy to job folder ─────────
             for url, api_duration in clips:
-                if len(collected) >= CLIPS_PER_SEGMENT:
+                if len(collected) >= clips_needed:
                     break
 
                 # Skip URLs already in the DB (another term may have found the same video)

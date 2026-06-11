@@ -251,6 +251,42 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return "\n".join(lines)
 
 
+# ─── Script alignment ─────────────────────────────────────────────────────────
+
+def _align_script_to_segments(original_script: str, segments: list[dict]) -> list[dict]:
+    """
+    Replace WhisperX-transcribed words with the original Hinglish script words,
+    preserving WhisperX timing. WhisperX transcribes with language="hi" so English
+    words in the script get written back as Devanagari — this restores the original
+    mixed-script text while keeping the accurate word-level timestamps.
+    """
+    whisper_words = [w for seg in segments for w in seg.get("words", [])]
+    n_wt = len(whisper_words)
+    original_tokens = original_script.split()
+    n_orig = len(original_tokens)
+    if n_orig == 0 or n_wt == 0:
+        return segments
+
+    aligned_flat = []
+    for i, wt in enumerate(whisper_words):
+        orig_idx = min(round(i * n_orig / n_wt), n_orig - 1)
+        aligned_flat.append({"word": original_tokens[orig_idx], "start": wt["start"], "end": wt["end"]})
+
+    aligned_segments = []
+    flat_idx = 0
+    for seg in segments:
+        seg_word_count = len(seg.get("words", []))
+        seg_words = aligned_flat[flat_idx : flat_idx + seg_word_count]
+        flat_idx += seg_word_count
+        aligned_segments.append({
+            "text": " ".join(w["word"] for w in seg_words),
+            "start": seg["start"],
+            "end": seg["end"],
+            "words": seg_words,
+        })
+    return aligned_segments
+
+
 # ─── Main stage logic ─────────────────────────────────────────────────────────
 
 def run(job_id: str, model_size: str = "large-v2") -> dict:
@@ -323,6 +359,12 @@ def run(job_id: str, model_size: str = "large-v2") -> dict:
 
     total_words = sum(len(s["words"]) for s in segments)
     print(f"[Stage 4d] ✓ {len(segments)} segments, {total_words} words", flush=True)
+
+    # ── Step 3.5: Align original Hinglish script to WhisperX timestamps ──────
+    original_script = (job.get("content") or {}).get("hindi_script", "")
+    if original_script.strip():
+        segments = _align_script_to_segments(original_script, segments)
+        print(f"[Stage 4d] ✓ Aligned original script to WhisperX timestamps", flush=True)
 
     # ── Step 4: Save word timestamps JSON ────────────────────────────────────
     _step(4, "Saving word timestamps")

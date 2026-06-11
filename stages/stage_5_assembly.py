@@ -178,15 +178,59 @@ def volumedetect(path: Path) -> dict[str, float]:
 
 # ─── Remotion rendering ───────────────────────────────────────────────────────
 
-def _video_dims(job: dict) -> tuple[int, int]:
+_DRAFT_SCALE = 0.5   # draft renders at half resolution — same aspect, 4× fewer pixels
+
+
+def _video_dims(job: dict, draft: bool = False) -> tuple[int, int]:
     ar = job.get("aspect_ratio", "9:16")
-    return _ASPECT_DIMS.get(ar, _ASPECT_DIMS["9:16"])
+    w, h = _ASPECT_DIMS.get(ar, _ASPECT_DIMS["9:16"])
+    if draft:
+        # Round down to nearest even pixel (required by most video codecs)
+        w = int(w * _DRAFT_SCALE) & ~1
+        h = int(h * _DRAFT_SCALE) & ~1
+    return w, h
 
 
 def _voiceover_duration(voiceover_path: str) -> float:
     """Return duration of the voiceover WAV in seconds via ffprobe."""
     info = probe_video(Path(voiceover_path))
     return info["duration"]
+
+
+def _realign_segments_to_script(segments: list, hindi_script: str) -> list:
+    """
+    Replace the word text in whisper segments with tokens from hindi_script,
+    preserving WhisperX timing. Called at render time so captions always match
+    the current script even if stage 4d was not re-run after a stage 3 change.
+    """
+    all_whisper_words = [w for seg in segments for w in seg.get("words", [])]
+    n_wt = len(all_whisper_words)
+    script_tokens = hindi_script.split()
+    n_orig = len(script_tokens)
+    if n_orig == 0 or n_wt == 0:
+        return segments
+
+    aligned_flat = [
+        {
+            "word": script_tokens[min(round(i * n_orig / n_wt), n_orig - 1)],
+            "start": wt["start"],
+            "end": wt["end"],
+        }
+        for i, wt in enumerate(all_whisper_words)
+    ]
+
+    out, flat_idx = [], 0
+    for seg in segments:
+        count = len(seg.get("words", []))
+        seg_words = aligned_flat[flat_idx : flat_idx + count]
+        flat_idx += count
+        out.append({
+            "text": " ".join(w["word"] for w in seg_words),
+            "start": seg["start"],
+            "end": seg["end"],
+            "words": seg_words,
+        })
+    return out
 
 
 def _flatten_word_timestamps(segments: list) -> list[dict]:
@@ -205,12 +249,13 @@ def build_remotion_props(
     job: dict,
     profile: dict,
     out_dir: Path,
+    draft: bool = False,
     animation_type: str = "none",
     transitions_enabled: bool = False,
     transition_duration: float = 0.4,
 ) -> dict:
     """Build the JSON props object consumed by the Remotion HealthVideoComposition."""
-    video_w, video_h = _video_dims(job)
+    video_w, video_h = _video_dims(job, draft=draft)
     assets  = job.get("assets") or {}
     job_id  = job["job_id"]
 
@@ -278,8 +323,13 @@ def build_remotion_props(
     intro_path = Path(ASSETS_DIR) / "intro.mp4"
     outro_path = Path(ASSETS_DIR) / "outro.mp4"
 
-    # Word timestamps
+    # Word timestamps — always re-align to current hindi_script so captions
+    # stay in sync with the script even if stage 4d wasn't re-run after stage 3.
     whisper_segs = assets.get("whisper_word_timestamps")
+    if whisper_segs:
+        hindi_script = (job.get("content") or {}).get("hindi_script", "")
+        if hindi_script.strip():
+            whisper_segs = _realign_segments_to_script(whisper_segs, hindi_script)
     word_timestamps = _flatten_word_timestamps(whisper_segs) if whisper_segs else None
 
     return {
@@ -297,6 +347,13 @@ def build_remotion_props(
         "transitionsEnabled":   transitions_enabled,
         "transitionDurationFrames": round(transition_duration * FPS),
     }
+
+
+def _print_render_progress(pct: int, total_frames: int, bar_width: int = 30) -> None:
+    filled = round(bar_width * pct / 100)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    rendered = round(total_frames * pct / 100)
+    print(f"\r[Stage 5] [{bar}] {pct:3d}%  ({rendered}/{total_frames} frames)", end="", flush=True)
 
 
 def render_with_remotion(
@@ -320,7 +377,8 @@ def render_with_remotion(
 
     props_file.parent.mkdir(parents=True, exist_ok=True)
 
-    log_level = "verbose" if verbose else "error"
+    total_frames = props["totalDurationInFrames"]
+    log_level = "verbose" if verbose else "info"
     cmd = [
         "npx", "remotion", "render",
         "src/index.ts",
@@ -330,16 +388,38 @@ def render_with_remotion(
         f"--log={log_level}",
     ]
     print(f"[Stage 5] Running Remotion render ({props['width']}×{props['height']}, "
-          f"{props['totalDurationInFrames']} frames @ {props['fps']}fps)…")
+          f"{total_frames} frames @ {props['fps']}fps)…")
+
+    # Remotion emits lines like "...45%..." — parse them for a live progress bar.
+    _pct_re = re.compile(r"\b(\d{1,3})%")
+    last_pct = -1
 
     with _local_asset_server() as base_url:
         http_props = _remap_paths(props, base_url)
         props_file.write_text(json.dumps(http_props, ensure_ascii=False), encoding="utf-8")
-        result = subprocess.run(cmd, cwd=str(_REMOTION_DIR), text=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(_REMOTION_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        for line in proc.stdout:  # type: ignore[union-attr]
+            m = _pct_re.search(line)
+            if m:
+                pct = int(m.group(1))
+                if 0 <= pct <= 100 and pct != last_pct:
+                    last_pct = pct
+                    _print_render_progress(pct, total_frames)
+            elif verbose:
+                print(line, end="")
+        proc.wait()
 
-    if result.returncode != 0:
+    if last_pct >= 0:
+        print()  # newline after the progress bar
+    if proc.returncode != 0:
         raise RuntimeError(
-            f"Remotion render exited {result.returncode}. "
+            f"Remotion render exited {proc.returncode}. "
             "Check the output above for details."
         )
 
@@ -359,12 +439,11 @@ def assemble_video(
     All rendering is done by the Remotion CLI (npx remotion render).
     Returns the path to the finished video.mp4.
     """
-    video_w, video_h = _video_dims(job)
-    if draft:
-        print("[Stage 5] ⚠ Draft mode: Remotion renders at full resolution; "
-              "draft flag reduces quality gate strictness only.")
-
+    video_w, video_h = _video_dims(job, draft=draft)
     ar_label = job.get("aspect_ratio", "9:16")
+    if draft:
+        print(f"[Stage 5] Draft mode — rendering at {video_w}×{video_h} "
+              f"({int(_DRAFT_SCALE * 100)}% of final resolution)")
     print(f"[Stage 5] Aspect ratio: {ar_label} → {video_w}×{video_h}")
 
     assets = job.get("assets") or {}
@@ -381,6 +460,7 @@ def assemble_video(
 
     props = build_remotion_props(
         job, profile, out_dir,
+        draft=draft,
         animation_type=animation_type,
         transitions_enabled=transitions_enabled,
         transition_duration=transition_duration,
@@ -530,7 +610,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Stage 5 — video assembly (Remotion)")
     parser.add_argument("job_id", nargs="?", help="Job ID (auto-picks latest if omitted)")
-    parser.add_argument("--draft", action="store_true", help="Draft mode flag (passed through; Remotion always renders full res)")
+    parser.add_argument("--draft", action="store_true", help="Render at half resolution for fast preview (50%% of final dims)")
     parser.add_argument(
         "--animation-type", default="none",
         choices=["ken_burns", "slide_in", "zoom_punch", "none"],
