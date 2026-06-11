@@ -81,7 +81,7 @@
             }
         ],
         "script_language": "devanagari",
-        "script_language_instruction": "The entire voiceover script (hindi_script and every hindi_text field) MUST be written in Devanagari script. All Hindi words must be in Devanagari (e.g. आपको, क्या, शोध — NOT 'aapko', 'kya', 'shodh'). HOWEVER: widely-used English medical and technical terms that modern Hindi speakers actually say out loud (e.g. 'diabetes', 'blood pressure', 'heart attack', 'protein', 'calcium', 'exercise', 'stress', 'BMI', 'cholesterol', 'insulin') MUST remain in Roman script — do NOT replace them with pure Sanskrit/Hindi equivalents like 'madhumeh', 'raktachaap', 'hriday aaghat'. The test is: would a 45-year-old in Delhi say this word in normal conversation? If yes and they'd say it in English, keep it in Roman script.",
+        "script_language_instruction": "The entire voiceover script (hindi_script and every hindi_text field) MUST be written in Devanagari script for all Hindi words. All Hindi words must be in Devanagari (e.g. आपको, क्या — NOT 'aapko', 'kya'). HOWEVER: English words that modern Hindi speakers actually say out loud MUST remain in Roman script — this includes both medical terms (diabetes, blood pressure, heart attack, protein, calcium, exercise, stress, BMI, cholesterol, insulin) AND common everyday English (study, research, diet, lifestyle, healthy, weight, ok, actually, basically, fat, muscle, gut, immune, gut bacteria, inflammation). Do NOT replace these with Sanskrit/Hindi equivalents — never 'madhumeh', 'raktachaap', 'adhyayan', 'vyayam'. The test is: would a 45-year-old in Delhi say this word in normal conversation? If they'd say it in English, keep it in Roman. VOCABULARY must be colloquial — use 'log' not 'vyakti/vayask', 'doctor se baat karo' not 'paraamarsh lein', 'pata chala' not 'prakaash mein aaya'. EXAMPLE — ❌ Formal: 'ek adhyayan mein 96 vayaskon ko shaamil kiya gaya aur paraamarsh ke liye kaha gaya' ✅ Modern: 'ek study mein 96 logon ko shaamil kiya gaya aur doctor se milne ko kaha gaya'.",
         "absolute_prohibitions": [
             "Never use causal language ('causes', 'cures', 'prevents') for observational studies",
             "Never recommend stopping or modifying prescribed medications",
@@ -89,7 +89,7 @@
             "Never reference a study without mentioning sample size somewhere in the script",
             "Never open with 'Namaste doston, aaj ki video mein' or similar generic openers",
             "Never end with 'Toh yeh thi aaj ki jaankari' or similar filler closings",
-            "Never write Hindi words in Roman/Latin script — all Hindi must be in Devanagari characters only (no Hinglish)"
+            "Never transliterate Hindi words into Roman script — Hindi words must always be Devanagari (never write 'aapko', always write 'आपको'). English words that modern Hindi speakers actually say out loud must stay in Roman script — this includes both medical terms AND common everyday English like 'study', 'diet', 'ok', 'basically'."
         ]
     },
     "visuals": {

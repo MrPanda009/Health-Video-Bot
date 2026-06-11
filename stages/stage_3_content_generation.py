@@ -261,7 +261,7 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
 
 ⚠ CRITICAL LANGUAGE REQUIREMENT ⚠
 {script_language_instruction}
-This is non-negotiable. Producing Hinglish (Hindi written in Roman letters) will be treated as a failed output.
+This is non-negotiable. Hindi words must always be in Devanagari. English words that modern Hindi speakers say out loud (medical OR everyday: 'study', 'diet', 'lifestyle', 'ok', 'actually', 'basically') must stay in Roman — never substitute them with Sanskrit equivalents.
 
 ═══════════════════════════════════════════════
 STUDY FACTS (from peer-reviewed research)
