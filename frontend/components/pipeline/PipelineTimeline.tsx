@@ -71,7 +71,7 @@ export function PipelineTimeline({ job, onJobUpdated, autoStart, autoStartParams
   useEffect(() => {
     if (!autoStart || hasAutoStarted.current || job.status !== 'created') return
     hasAutoStarted.current = true
-    handleRun('stage_1', stableParams)
+    handleRun('stage_1', { ...stableParams, auto: true })
   }, [autoStart, job.status, handleRun, stableParams])
 
   // Refresh job state when the active stage's stream finishes

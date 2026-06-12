@@ -25,6 +25,7 @@ export async function GET(
   const topic = url.searchParams.get('topic') ?? ''
   const pmid = url.searchParams.get('pmid') ?? ''
   const whisperModel = url.searchParams.get('whisperModel') ?? ''
+  const autoMode = url.searchParams.get('auto') === '1'
 
   const stageDef = STAGES.find((s) => s.key === stage)
   if (!stageDef) {
@@ -55,6 +56,7 @@ export async function GET(
   let args: string[]
   if (stage === 'stage_1') {
     args = [scriptPath, topic, pmid, '', jobId]
+    if (autoMode) args.push('--auto')
   } else if (stage === 'stage_4d') {
     // whisperModel query param takes precedence; fall back to settings.json
     const model = whisperModel || readSettings().pipeline.default_whisper_model

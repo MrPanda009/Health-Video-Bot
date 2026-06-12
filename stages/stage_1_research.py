@@ -994,6 +994,7 @@ def run(
     pmid_override: str = None,
     aspect_ratio: str = "9:16",
     pre_created_job_id: Optional[str] = None,
+    auto_select: bool = False,
 ) -> dict:
     """
     Main Stage 1 runner.
@@ -1103,6 +1104,9 @@ def run(
 
         if pmid_override:
             selected_pmid = pmid_override
+        elif auto_select:
+            selected_pmid = candidates[0].pmid
+            print(f"[Stage 1] --auto flag set — auto-selecting top-ranked candidate")
         else:
             print("Select a study — enter 1, 2, or 3 (or paste a PMID directly):")
             try:
@@ -1185,12 +1189,14 @@ if __name__ == "__main__":
     pmid_arg            = sys.argv[2] if len(sys.argv) > 2 else None
     aspect_ratio_arg    = sys.argv[3] if len(sys.argv) > 3 else "9:16"
     pre_created_job_id  = sys.argv[4] if len(sys.argv) > 4 else None
+    auto_select         = "--auto" in sys.argv
 
     result = run(
         topic=topic_arg if topic_arg else None,
         pmid_override=pmid_arg if pmid_arg else None,
         aspect_ratio=aspect_ratio_arg,
         pre_created_job_id=pre_created_job_id if pre_created_job_id else None,
+        auto_select=auto_select,
     )
 
     print(f"\nFinal status : {result['status']}")
