@@ -31,6 +31,8 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
     wordTimestamps,
     introPath,
     outroPath,
+    clickSoundPath,
+    bellSoundPath,
   } = props;
 
   const { width, height } = useVideoConfig();
@@ -110,7 +112,7 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
 
       {/* Animated subscribe button near the end */}
       <Sequence from={subscribeStartFrame} durationInFrames={subscribeDuration}>
-        <SubscribeButton />
+        <SubscribeButton clickSoundPath={clickSoundPath} bellSoundPath={bellSoundPath} />
       </Sequence>
     </AbsoluteFill>
   );

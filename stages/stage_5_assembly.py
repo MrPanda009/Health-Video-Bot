@@ -56,6 +56,10 @@ FPS                 = 30
 DISCLAIMER_DURATION = 3        # seconds
 BROLL_CUT_INTERVAL  = 5.0      # seconds between B-roll cuts within a segment
 
+# Subscribe-button sound effects (files live in assets/music/)
+DEFAULT_CLICK_SOUND = "universfield-computer-mouse-click-352734.mp3"
+DEFAULT_BELL_SOUND  = "freesound_community-bell-98033.mp3"
+
 # Supported output dimensions keyed by aspect_ratio string
 _ASPECT_DIMS: dict[str, tuple[int, int]] = {
     "9:16": (1080, 1920),
@@ -253,6 +257,8 @@ def build_remotion_props(
     animation_type: str = "none",
     transitions_enabled: bool = False,
     transition_duration: float = 0.4,
+    click_sound: str | None = None,
+    bell_sound: str | None = None,
 ) -> dict:
     """Build the JSON props object consumed by the Remotion HealthVideoComposition."""
     video_w, video_h = _video_dims(job, draft=draft)
@@ -323,6 +329,16 @@ def build_remotion_props(
     intro_path = Path(ASSETS_DIR) / "intro.mp4"
     outro_path = Path(ASSETS_DIR) / "outro.mp4"
 
+    # Subscribe-button sound effects — resolve filenames against assets/music/
+    def _resolve_music(name: str | None) -> str | None:
+        if not name:
+            return None
+        p = Path(ASSETS_DIR) / "music" / name
+        return str(p.resolve()) if p.exists() else None
+
+    click_sound_abs = _resolve_music(click_sound or DEFAULT_CLICK_SOUND)
+    bell_sound_abs  = _resolve_music(bell_sound or DEFAULT_BELL_SOUND)
+
     # Word timestamps — always re-align to current hindi_script so captions
     # stay in sync with the script even if stage 4d wasn't re-run after stage 3.
     whisper_segs = assets.get("whisper_word_timestamps")
@@ -344,6 +360,8 @@ def build_remotion_props(
         "wordTimestamps":       word_timestamps,
         "introPath":            str(intro_path.resolve()) if intro_path.exists() else None,
         "outroPath":            str(outro_path.resolve()) if outro_path.exists() else None,
+        "clickSoundPath":       click_sound_abs,
+        "bellSoundPath":        bell_sound_abs,
         "transitionsEnabled":   transitions_enabled,
         "transitionDurationFrames": round(transition_duration * FPS),
     }
@@ -450,6 +468,8 @@ def assemble_video(
     animation_type: str = "none",
     transitions_enabled: bool = False,
     transition_duration: float = 0.4,
+    click_sound: str | None = None,
+    bell_sound: str | None = None,
 ) -> Path:
     """
     Assemble the final video using Remotion.
@@ -482,6 +502,8 @@ def assemble_video(
         animation_type=animation_type,
         transitions_enabled=transitions_enabled,
         transition_duration=transition_duration,
+        click_sound=click_sound,
+        bell_sound=bell_sound,
     )
 
     render_with_remotion(props, output_path, props_file, verbose=False)
@@ -544,6 +566,8 @@ def run(
     animation_type: str = "none",
     transitions_enabled: bool = False,
     transition_duration: float = 0.4,
+    click_sound: str | None = None,
+    bell_sound: str | None = None,
 ) -> dict:
     profile = load_niche_profile()
     job     = load_job(job_id)
@@ -585,6 +609,8 @@ def run(
             animation_type=animation_type,
             transitions_enabled=transitions_enabled,
             transition_duration=transition_duration,
+            click_sound=click_sound,
+            bell_sound=bell_sound,
         )
     except FileNotFoundError as e:
         return mark_error(job, str(e))
@@ -640,6 +666,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--transition-duration", type=float, default=0.4,
     )
+    parser.add_argument(
+        "--click-sound", default=None,
+        help="Filename in assets/music/ for the subscribe-button click sound",
+    )
+    parser.add_argument(
+        "--bell-sound", default=None,
+        help="Filename in assets/music/ for the subscribe-button bell sound",
+    )
     parsed = parser.parse_args()
 
     transitions_enabled = parsed.transition_type == "crossfade"
@@ -679,6 +713,8 @@ if __name__ == "__main__":
         animation_type=animation_type,
         transitions_enabled=transitions_enabled,
         transition_duration=transition_duration,
+        click_sound=parsed.click_sound,
+        bell_sound=parsed.bell_sound,
     )
     print(f"\nFinal status : {result['status']}")
     if result.get("error"):

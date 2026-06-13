@@ -25,6 +25,8 @@ export interface HealthVideoProps {
   wordTimestamps?: WordTimestamp[] | null;
   introPath?: string | null;
   outroPath?: string | null;
+  clickSoundPath?: string | null;
+  bellSoundPath?: string | null;
   transitionsEnabled: boolean;
   transitionDurationFrames: number;
 }

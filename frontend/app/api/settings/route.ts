@@ -42,6 +42,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     default_render_mode: 'final',
     default_whisper_model: 'large-v2',
   },
+  audio: {
+    subscribe_click_sound: 'universfield-computer-mouse-click-352734.mp3',
+    subscribe_bell_sound: 'freesound_community-bell-98033.mp3',
+  },
 }
 
 export function readSettings(): AppSettings {
@@ -51,6 +55,7 @@ export function readSettings(): AppSettings {
       return {
         assembly: { ...DEFAULT_SETTINGS.assembly, ...(parsed.assembly ?? {}) },
         pipeline: { ...DEFAULT_SETTINGS.pipeline, ...(parsed.pipeline ?? {}) },
+        audio: { ...DEFAULT_SETTINGS.audio, ...(parsed.audio ?? {}) },
       }
     }
   } catch {
@@ -82,6 +87,7 @@ export async function PUT(request: Request) {
     const updated: AppSettings = {
       assembly: { ...current.assembly, ...(body.assembly ?? {}) },
       pipeline: { ...current.pipeline, ...(body.pipeline ?? {}) },
+      audio: { ...current.audio, ...(body.audio ?? {}) },
     }
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(updated, null, 2))
     return Response.json(updated)

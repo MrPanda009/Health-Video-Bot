@@ -269,7 +269,13 @@ export interface PipelineSettings {
   default_whisper_model: string
 }
 
+export interface AudioSettings {
+  subscribe_click_sound: string // filename under assets/music/
+  subscribe_bell_sound: string
+}
+
 export interface AppSettings {
   assembly: AssemblySettings
   pipeline: PipelineSettings
+  audio: AudioSettings
 }

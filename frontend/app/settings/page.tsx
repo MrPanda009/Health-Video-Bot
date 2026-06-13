@@ -1,7 +1,9 @@
 'use client'
 
 import { useCallback, useRef, useState } from 'react'
+import useSWR from 'swr'
 import {
+  Bell,
   CheckCircle2,
   ChevronDown,
   Clapperboard,
@@ -12,7 +14,10 @@ import {
 } from 'lucide-react'
 import { useSettings } from '@/hooks/useSettings'
 import type { SettingsPatch } from '@/hooks/useSettings'
-import type { AppSettings, AssemblySettings, PipelineSettings } from '@/lib/types'
+import type { AppSettings, AssemblySettings, AudioSettings, PipelineSettings } from '@/lib/types'
+
+const audioFetcher = (url: string) =>
+  fetch(url).then((r) => r.json() as Promise<{ files: string[] }>)
 
 // ─── Primitives ───────────────────────────────────────────────────────────────
 
@@ -243,10 +248,12 @@ const ANIMATION_OPTIONS = [
 type SettingsOverrides = {
   assembly?: Partial<AssemblySettings>
   pipeline?: Partial<PipelineSettings>
+  audio?: Partial<AudioSettings>
 }
 
 export default function SettingsPage() {
   const { settings, env, isLoading, fetchError, saveSettings } = useSettings()
+  const { data: audioData } = useSWR('/api/audio', audioFetcher, { revalidateOnFocus: false })
 
   // Track only user-made overrides on top of server state — avoids setState-in-effect
   const [overrides, setOverrides] = useState<SettingsOverrides>({})
@@ -258,6 +265,7 @@ export default function SettingsPage() {
     ? {
         assembly: { ...settings.assembly, ...(overrides.assembly ?? {}) } as AssemblySettings,
         pipeline: { ...settings.pipeline, ...(overrides.pipeline ?? {}) } as PipelineSettings,
+        audio: { ...settings.audio, ...(overrides.audio ?? {}) } as AudioSettings,
       }
     : null
 
@@ -288,6 +296,11 @@ export default function SettingsPage() {
     triggerSave({ pipeline: patch })
   }
 
+  function patchAudio(patch: Partial<AudioSettings>) {
+    setOverrides((prev: SettingsOverrides) => ({ ...prev, audio: { ...(prev.audio ?? {}), ...patch } }))
+    triggerSave({ audio: patch })
+  }
+
   if (isLoading || !local) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
@@ -306,6 +319,16 @@ export default function SettingsPage() {
 
   const a = local.assembly
   const p = local.pipeline
+  const aud = local.audio
+
+  // Audio file options — ensure the currently-selected values appear even if the
+  // file list hasn't loaded yet (or the file was removed from assets/music/).
+  const audioFiles = audioData?.files ?? []
+  const audioOptions = (current: string) =>
+    Array.from(new Set([...(current ? [current] : []), ...audioFiles])).map((f) => ({
+      value: f,
+      label: f,
+    }))
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -436,6 +459,40 @@ export default function SettingsPage() {
                 />
               </div>
             </SettingRowWide>
+          </Section>
+
+          {/* ── Subscribe Animation ──────────────────────────────────────────── */}
+          <Section
+            icon={Bell}
+            title="Subscribe Animation"
+            description="Sound effects for the end-screen subscribe button (a cursor clicks the bell, then it rings). Files are read from assets/music/."
+          >
+            <SettingRow
+              label="Click sound"
+              description="Plays when the cursor clicks the bell"
+              control={
+                <div className="w-64">
+                  <Select
+                    value={aud.subscribe_click_sound}
+                    onChange={(v) => patchAudio({ subscribe_click_sound: v })}
+                    options={audioOptions(aud.subscribe_click_sound)}
+                  />
+                </div>
+              }
+            />
+            <SettingRow
+              label="Bell sound"
+              description="Plays ~0.2 s after the click, as the bell rings"
+              control={
+                <div className="w-64">
+                  <Select
+                    value={aud.subscribe_bell_sound}
+                    onChange={(v) => patchAudio({ subscribe_bell_sound: v })}
+                    options={audioOptions(aud.subscribe_bell_sound)}
+                  />
+                </div>
+              }
+            />
           </Section>
 
           {/* ── Pipeline defaults ─────────────────────────────────────────────── */}

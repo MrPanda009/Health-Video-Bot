@@ -1,11 +1,12 @@
 'use client'
 
 import useSWR from 'swr'
-import type { AppSettings, AssemblySettings, PipelineSettings } from '@/lib/types'
+import type { AppSettings, AssemblySettings, AudioSettings, PipelineSettings } from '@/lib/types'
 
 export type SettingsPatch = {
   assembly?: Partial<AssemblySettings>
   pipeline?: Partial<PipelineSettings>
+  audio?: Partial<AudioSettings>
 }
 
 interface SettingsResponse {

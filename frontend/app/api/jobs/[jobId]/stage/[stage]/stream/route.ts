@@ -70,6 +70,9 @@ export async function GET(
     args.push('--transition-type', asm.transitions_enabled ? asm.transition_type : 'none')
     args.push('--animation-type', asm.animations_enabled ? asm.animation_type : 'none')
     args.push('--transition-duration', String(asm.transition_duration))
+    const aud = settings.audio
+    if (aud?.subscribe_click_sound) args.push('--click-sound', aud.subscribe_click_sound)
+    if (aud?.subscribe_bell_sound) args.push('--bell-sound', aud.subscribe_bell_sound)
   } else {
     args = [scriptPath, jobId]
   }
