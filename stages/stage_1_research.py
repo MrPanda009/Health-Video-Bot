@@ -82,6 +82,7 @@ class StudyFull(BaseModel):
     abstract: str
     full_text_available: bool
     pdf_path: Optional[str] = None
+    pdf_text: Optional[str] = None
     screenshot_paths: list[str] = Field(default_factory=list)
     industry_funded: Optional[bool] = None
     funding_source: Optional[str] = None
@@ -758,6 +759,26 @@ async def _playwright_download_pdf(pdf_url: str, pdf_path: str, headless: bool =
             await browser.close()
 
 
+def extract_pdf_text(pdf_path: str, max_chars: int = 8000) -> Optional[str]:
+    """
+    Extract text from a downloaded PDF using pymupdf.
+    Returns the first max_chars characters (covers abstract through most of Results).
+    Fails silently — a None result is not an error; the pipeline continues on abstract alone.
+    """
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(pdf_path)
+        text = "\n".join(page.get_text() for page in doc)
+        doc.close()
+        return text[:max_chars].strip() or None
+    except ImportError:
+        print("[Stage 1] pymupdf not installed — skipping PDF text extraction (pip install pymupdf)")
+        return None
+    except Exception as e:
+        print(f"[Stage 1] PDF text extraction failed: {e}")
+        return None
+
+
 def try_download_pdf(study: StudyFull, job_id: str) -> Optional[str]:
     """
     Waterfall PDF download: Strategy A (NCBI OA) → Strategy B (Unpaywall) → skip.
@@ -1129,8 +1150,12 @@ def run(
         # ── Build study object ───────────────────────────────────────────────
         study = build_full_study(selected_pmid, summaries, topic, query)
 
-        # ── PDF download ─────────────────────────────────────────────────────
+        # ── PDF download + text extraction ───────────────────────────────────
         study.pdf_path = try_download_pdf(study, job_id)
+        if study.pdf_path:
+            study.pdf_text = extract_pdf_text(study.pdf_path)
+            chars = len(study.pdf_text) if study.pdf_text else 0
+            print(f"[Stage 1] PDF text extracted: {chars} chars")
 
         # ── Screenshots ──────────────────────────────────────────────────────
         study.screenshot_paths = screenshot_pubmed_abstract(selected_pmid, job_id)

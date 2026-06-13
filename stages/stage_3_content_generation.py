@@ -276,9 +276,13 @@ Effect size:           {claims.get('effect_size') or 'not reported in abstract'}
 Sample size:           {claims.get('sample_size') or 'not stated in abstract'}
 Population:            {claims.get('population_description') or 'not specified'}
 Follow-up:             {claims.get('follow_up_duration') or 'not stated'}
+Study design:          {claims.get('methodology_summary') or 'see abstract'}
 What it does NOT prove: {claims.get('what_study_does_not_prove', '')}
 Key limitations:       {'; '.join(claims.get('primary_limitations', [])) or 'not stated in abstract'}
 Additional stats:      {'; '.join(claims.get('key_stats', [])) or 'none'}
+
+ORIGINAL ABSTRACT (for authentic phrasing and context):
+{study.get('abstract', '')}
 
 ═══════════════════════════════════════════════
 EDITORIAL RULES (from channel niche profile)

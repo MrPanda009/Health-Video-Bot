@@ -26,6 +26,7 @@
         "abstract": "string — full abstract text",
         "full_text_available": "bool",
         "pdf_path": "string — local path or null",
+        "pdf_text": "string — first 8000 chars of extracted PDF text, or null if unavailable",
         "screenshot_paths": "list of strings — local paths to figure/abstract screenshots",
         "industry_funded": "bool or null if unknown",
         "funding_source": "string or null"
@@ -41,7 +42,8 @@
         "is_causal_language_safe": "bool — false if observational study",
         "small_study_flag": "bool — true if sample_size < threshold in niche_profile",
         "industry_funded_flag": "bool",
-        "key_stats": "list of strings — supporting statistics beyond the primary finding"
+        "key_stats": "list of strings — supporting statistics beyond the primary finding",
+        "methodology_summary": "string or null — 1-2 sentence study design summary (blinding, recruitment, follow-up, setting)"
     },
     "content": {
         "hindi_script": "string — full voiceover script in Hindi",

@@ -101,6 +101,10 @@ class ClaimsBlock(BaseModel):
         default=None,
         description="Funding source if mentioned in abstract. Null otherwise."
     )
+    methodology_summary: Optional[str] = Field(
+        default=None,
+        description="1-2 sentences on study design: blinding, recruitment method, follow-up duration, and setting. Null if not enough info."
+    )
 
     # Safety flags — set by our validator logic, NOT by the LLM
     is_causal_language_safe: bool = Field(
@@ -189,16 +193,25 @@ def build_extraction_prompt(study: dict) -> str:
     authors       = study.get("authors", [])
     authors_str   = ", ".join(authors[:3]) + (" et al." if len(authors) > 3 else "")
 
-    return f"""You are a medical research analyst. Extract structured claims from the following study abstract.
+    full_text_block = ""
+    if study.get("pdf_text"):
+        full_text_block = f"""
+
+FULL TEXT EXCERPT (prefer these numbers over the abstract for precise statistics):
+{study['pdf_text']}"""
+
+    return f"""You are a medical research analyst. Extract structured claims from the following study.
 
 CRITICAL RULES:
-- Extract ONLY what is EXPLICITLY stated in the abstract. Do not infer, extrapolate, or add outside knowledge.
-- If a field is not mentioned in the abstract, set it to null (or empty list for arrays).
-- For effect_size: copy the exact number and units as written. Do not round or restate.
+- Extract ONLY what is EXPLICITLY stated in the provided text. Do not infer, extrapolate, or add outside knowledge.
+- If a field is not mentioned, set it to null (or empty list for arrays).
+- For effect_size: copy the exact number and units as written. Prefer full-text tables over abstract summaries.
 - For sample_size: extract the total N. For meta-analyses, look for total participants across studies.
 - For what_study_does_not_prove: write one clear sentence. Guidance: {type_guidance}
 - Do NOT mention the study's positive findings in what_study_does_not_prove — focus on its limits.
-- For industry_funded: only set True if the abstract EXPLICITLY mentions commercial/industry funding.
+- For industry_funded: only set True if the text EXPLICITLY mentions commercial/industry funding.
+- For methodology_summary: 1-2 sentences describing design, blinding, recruitment, and setting. Null if not enough info.
+- For key_stats: include p-values, confidence intervals, and secondary outcomes from results tables if available.
 
 STUDY DETAILS:
 Title: {study.get('title', '')}
@@ -208,7 +221,7 @@ Study type: {study_type}
 PMID: {study.get('pmid', '')}
 
 ABSTRACT:
-{study.get('abstract', '')}
+{study.get('abstract', '')}{full_text_block}
 
 Respond with ONLY a valid JSON object. No explanation, no markdown, no backticks. Match this exact structure:
 
@@ -222,7 +235,8 @@ Respond with ONLY a valid JSON object. No explanation, no markdown, no backticks
   "what_study_does_not_prove": "string — what this study cannot conclude",
   "key_stats": ["string", ...],
   "industry_funded": true/false/null,
-  "funding_source": "string or null"
+  "funding_source": "string or null",
+  "methodology_summary": "string or null — 1-2 sentences: design, blinding, recruitment, setting"
 }}"""
 
 
