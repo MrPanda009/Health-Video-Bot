@@ -38,7 +38,7 @@ export const ScreenshotOverlay: React.FC<Props> = ({
       )
     : 0;
 
-  const ssWidth = Math.round(width * 0.6);
+  const ssWidth = Math.round(width * 0.8);
   const ssLeft = Math.round((width - ssWidth) / 2);
 
   return (

@@ -151,24 +151,34 @@ LLM_MODEL          = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "auto").lower()
 ```
 
-### LLM client — supports Anthropic, OpenAI, and Groq
+### LLM client — supports Anthropic, OpenAI, and OpenAI-compatible providers (Groq, NVIDIA, OpenRouter)
 ```python
+# OpenAI-compatible providers: provider -> (base_url, api_key_env_var)
+_OPENAI_COMPAT = {
+    "groq":       ("https://api.groq.com/openai/v1",       "GROQ_API_KEY"),
+    "nvidia":     ("https://integrate.api.nvidia.com/v1",  "NVIDIA_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1",         "OPENROUTER_API_KEY"),
+}
+
 def _get_llm_client():
-    model = LLM_MODEL.lower()
-    if model.startswith("claude"):
+    """Return (provider_name, client) based on LLM_MODEL / LLM_PROVIDER env vars."""
+    provider = LLM_PROVIDER
+    if provider == "auto":
+        provider = "anthropic" if LLM_MODEL.lower().startswith("claude") else "openai"
+    if provider == "anthropic":
         import anthropic
         return "anthropic", anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    elif LLM_PROVIDER == "groq":
+    if provider in _OPENAI_COMPAT:
+        base_url, key_env = _OPENAI_COMPAT[provider]
         from openai import OpenAI
-        return "groq", OpenAI(
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url="https://api.groq.com/openai/v1",
-        )
-    else:
-        from openai import OpenAI
-        return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        return provider, OpenAI(api_key=os.getenv(key_env), base_url=base_url)
+    from openai import OpenAI
+    return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 ```
 
+`LLM_PROVIDER` accepts `auto | anthropic | openai | groq | nvidia | openrouter`. Groq, NVIDIA, and
+OpenRouter are OpenAI-compatible — same SDK, custom `base_url`. The provider/model and per-provider
+API keys are also editable from the dashboard Settings page (writes to `.env`).
 **Groq is free and recommended for development.** Get a key at console.groq.com.
 Best free models: `llama-3.3-70b-versatile` (recommended), `mixtral-8x7b-32768`, `llama-3.1-8b-instant`.
 Set `LLM_PROVIDER=groq` and `LLM_MODEL=llama-3.3-70b-versatile` in `.env` to switch.

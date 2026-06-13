@@ -279,3 +279,19 @@ export interface AppSettings {
   pipeline: PipelineSettings
   audio: AudioSettings
 }
+
+// ─── LLM providers ──────────────────────────────────────────────────────────
+// Mirrors `_OPENAI_COMPAT` + provider resolution in stages/stage_2 & stage_3.
+// `keyEnv` is the .env var holding that provider's API key (null for "auto").
+// `placeholder` is the model-id hint shown in the free-text model field.
+
+export const LLM_PROVIDERS = [
+  { id: 'auto',       label: 'Auto',       keyEnv: null,                 placeholder: 'claude-sonnet-4-6' },
+  { id: 'anthropic',  label: 'Anthropic',  keyEnv: 'ANTHROPIC_API_KEY',  placeholder: 'claude-sonnet-4-6' },
+  { id: 'openai',     label: 'OpenAI',     keyEnv: 'OPENAI_API_KEY',     placeholder: 'gpt-4o' },
+  { id: 'groq',       label: 'Groq',       keyEnv: 'GROQ_API_KEY',       placeholder: 'llama-3.3-70b-versatile' },
+  { id: 'nvidia',     label: 'NVIDIA',     keyEnv: 'NVIDIA_API_KEY',     placeholder: 'meta/llama-3.3-70b-instruct' },
+  { id: 'openrouter', label: 'OpenRouter', keyEnv: 'OPENROUTER_API_KEY', placeholder: 'meta-llama/llama-3.3-70b-instruct' },
+] as const
+
+export type LLMProviderId = (typeof LLM_PROVIDERS)[number]['id']

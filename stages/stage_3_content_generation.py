@@ -41,20 +41,28 @@ LLM_MODEL          = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "auto").lower()
 
 
+# OpenAI-compatible providers: provider -> (base_url, api_key_env_var)
+_OPENAI_COMPAT = {
+    "groq":       ("https://api.groq.com/openai/v1",       "GROQ_API_KEY"),
+    "nvidia":     ("https://integrate.api.nvidia.com/v1",  "NVIDIA_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1",         "OPENROUTER_API_KEY"),
+}
+
+
 def _get_llm_client():
-    model = LLM_MODEL.lower()
-    if model.startswith("claude"):
+    """Return (provider_name, client) based on LLM_MODEL / LLM_PROVIDER env vars."""
+    provider = LLM_PROVIDER
+    if provider == "auto":
+        provider = "anthropic" if LLM_MODEL.lower().startswith("claude") else "openai"
+    if provider == "anthropic":
         import anthropic
         return "anthropic", anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    elif LLM_PROVIDER == "groq":
+    if provider in _OPENAI_COMPAT:
+        base_url, key_env = _OPENAI_COMPAT[provider]
         from openai import OpenAI
-        return "groq", OpenAI(
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url="https://api.groq.com/openai/v1",
-        )
-    else:
-        from openai import OpenAI
-        return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        return provider, OpenAI(api_key=os.getenv(key_env), base_url=base_url)
+    from openai import OpenAI
+    return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # ─── Pydantic models ──────────────────────────────────────────────────────────
@@ -297,6 +305,9 @@ Terminology rules:
 ABSOLUTE PROHIBITIONS (never violate these):
 {chr(10).join('- ' + p for p in profile['script']['absolute_prohibitions'])}
 
+STATISTICS RULE:
+The viewer is NOT a scientist. Present at most 2-3 numbers in the ENTIRE script and only as simple percentages or plain fractions — e.g. "22% कम risk" or "3 गुना ज़्यादा". NEVER use RR, OR, HR, SMD, confidence intervals, p-values, or any notation like "(RR = 0.78)" in the spoken script. Pick the single most striking percentage from the study to anchor the finding, and use at most 1-2 supporting numbers. The audience tunes out after the third number.
+
 LANGUAGE RULE:
 {causal_rule}{small_study_note}{below_minimum_note}{funding_note}
 
@@ -460,14 +471,25 @@ def call_llm(prompt: str, attempt: int = 1) -> str:
         )
         return response.content[0].text
     else:
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=LLM_MODEL,
-            max_tokens=4096,
+            max_tokens=8192,  # headroom for reasoning models + a lot of content
             temperature=0.4,
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.choices[0].message.content
+        # Reasoning models (e.g. NVIDIA's gpt-oss) emit chain-of-thought tokens that
+        # share the max_tokens budget — keep effort low so the JSON body isn't truncated.
+        if "gpt-oss" in LLM_MODEL.lower():
+            kwargs["reasoning_effort"] = "low"
+        response = client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                "Response truncated (hit max_tokens) before the JSON was complete — "
+                "raise max_tokens or pick a model that reasons less."
+            )
+        return choice.message.content
 
 
 def parse_llm_response(raw: str) -> dict:
@@ -557,6 +579,16 @@ def validate_content(content: ContentBlock, claims: dict, profile: dict) -> list
                 f"found in script (threshold: {threshold}). Missing: {missing}. "
                 f"The finding segment must name each intervention individually."
             )
+
+    # ── Stat jargon check (soft warning) ────────────────────────────────────
+    import re
+    jargon_re = re.compile(r'\b(RR|OR|HR|SMD)\s*[=≈<>]', re.IGNORECASE)
+    jargon_hits = jargon_re.findall(content.hindi_script)
+    if jargon_hits:
+        notes.append(
+            f"[QUALITY:STAT_JARGON] Script contains raw statistical notation: "
+            f"{jargon_hits}. Replace with plain-language percentages."
+        )
 
     # ── Word count check (soft warning) ─────────────────────────────────────
     word_count = len(content.hindi_script.split())
@@ -690,6 +722,12 @@ def run(job_id: str) -> dict:
                 feedback_lines.append(
                     f"- WORD COUNT: {issue.split(chr(93) + chr(32), 1)[-1]} "
                     f"Write more for the finding segment — it needs ~{target_wc} words alone."
+                )
+            elif "QUALITY:STAT_JARGON" in issue:
+                feedback_lines.append(
+                    f"- STAT JARGON: {issue.split(chr(93) + chr(32), 1)[-1]} "
+                    f"Remove ALL RR/OR/HR/SMD notation from the script. "
+                    f"Use plain percentages only — '22% कम risk' not '(RR = 0.78)'."
                 )
 
         prompt  = base_prompt + "\n".join(feedback_lines)

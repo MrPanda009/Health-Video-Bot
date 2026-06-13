@@ -9,5 +9,9 @@
   "pipeline": {
     "default_render_mode": "final",
     "default_whisper_model": "large-v3"
+  },
+  "audio": {
+    "subscribe_click_sound": "universfield-computer-mouse-click-352734.mp3",
+    "subscribe_bell_sound": "freesound_community-bell-98033.mp3"
   }
 }

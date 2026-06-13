@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Clapperboard,
+  Cpu,
   Info,
   Loader2,
   Sliders,
@@ -15,6 +16,7 @@ import {
 import { useSettings } from '@/hooks/useSettings'
 import type { SettingsPatch } from '@/hooks/useSettings'
 import type { AppSettings, AssemblySettings, AudioSettings, PipelineSettings } from '@/lib/types'
+import { LLM_PROVIDERS } from '@/lib/types'
 
 const audioFetcher = (url: string) =>
   fetch(url).then((r) => r.json() as Promise<{ files: string[] }>)
@@ -257,6 +259,9 @@ export default function SettingsPage() {
 
   // Track only user-made overrides on top of server state — avoids setState-in-effect
   const [overrides, setOverrides] = useState<SettingsOverrides>({})
+  // LLM provider/model live in .env (not settings.json) — tracked separately.
+  const [envOverrides, setEnvOverrides] = useState<{ provider?: string; model?: string }>({})
+  const [keyDraft, setKeyDraft] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -299,6 +304,20 @@ export default function SettingsPage() {
   function patchAudio(patch: Partial<AudioSettings>) {
     setOverrides((prev: SettingsOverrides) => ({ ...prev, audio: { ...(prev.audio ?? {}), ...patch } }))
     triggerSave({ audio: patch })
+  }
+
+  // Always send provider + model together (idempotent) so a debounced save never
+  // drops one for the other. `keys` is included only when committing an API key.
+  function patchEnv(
+    next: { provider?: string; model?: string },
+    keyPatch?: Record<string, string>,
+  ) {
+    const provider = next.provider ?? envOverrides.provider ?? env?.llm_provider ?? 'auto'
+    const model = next.model ?? envOverrides.model ?? env?.llm_model ?? ''
+    setEnvOverrides((prev) => ({ ...prev, ...next }))
+    triggerSave({
+      env: { LLM_PROVIDER: provider, LLM_MODEL: model, ...(keyPatch ? { keys: keyPatch } : {}) },
+    })
   }
 
   if (isLoading || !local) {
@@ -546,6 +565,86 @@ export default function SettingsPage() {
             />
           </Section>
 
+          {/* ── LLM Provider ─────────────────────────────────────────────────── */}
+          {env && (() => {
+            const provider = envOverrides.provider ?? env.llm_provider
+            const model = envOverrides.model ?? env.llm_model
+            const meta = LLM_PROVIDERS.find((p) => p.id === provider) ?? LLM_PROVIDERS[0]
+            const keyEnv = meta.keyEnv
+            const keyIsSet = keyEnv ? Boolean(env.keys?.[keyEnv]) : false
+            const inputClasses = [
+              'w-full rounded-lg border px-3 py-2 text-sm',
+              'border-zinc-300 bg-white text-zinc-900',
+              'dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100',
+              'focus:outline-none focus:ring-2 focus:ring-blue-500',
+            ].join(' ')
+            return (
+              <Section
+                icon={Cpu}
+                title="LLM Provider"
+                description="Used by Stage 2 (claim extraction) and Stage 3 (content generation). Written to .env — applies on the next stage run."
+              >
+                <SettingRow
+                  label="Provider"
+                  description="Groq, NVIDIA, and OpenRouter are OpenAI-compatible. Auto resolves claude* → Anthropic, else OpenAI."
+                  control={
+                    <div className="w-44">
+                      <Select
+                        value={provider}
+                        onChange={(v) => {
+                          setKeyDraft('')
+                          patchEnv({ provider: v })
+                        }}
+                        options={LLM_PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+                      />
+                    </div>
+                  }
+                />
+                <SettingRowWide
+                  label="Model"
+                  description="Exact model id for the selected provider"
+                  indent
+                >
+                  <input
+                    type="text"
+                    value={model}
+                    placeholder={meta.placeholder}
+                    spellCheck={false}
+                    onChange={(e) => patchEnv({ model: e.target.value })}
+                    className={`${inputClasses} font-mono`}
+                  />
+                </SettingRowWide>
+                {keyEnv && (
+                  <SettingRowWide
+                    label={`${meta.label} API key`}
+                    description={
+                      keyIsSet
+                        ? `${keyEnv} is set. Enter a new value to replace it; leave blank to keep the current key.`
+                        : `${keyEnv} is not set. Paste the key to enable this provider.`
+                    }
+                    indent
+                  >
+                    <input
+                      type="password"
+                      value={keyDraft}
+                      placeholder={keyIsSet ? '•••••••• set' : 'sk-…'}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(e) => setKeyDraft(e.target.value)}
+                      onBlur={() => {
+                        if (keyEnv && keyDraft.trim()) {
+                          patchEnv({}, { [keyEnv]: keyDraft })
+                          setKeyDraft('')
+                        }
+                      }}
+                      className={`${inputClasses} font-mono`}
+                    />
+                  </SettingRowWide>
+                )}
+              </Section>
+            )
+          })()}
+
           {/* ── Environment info ─────────────────────────────────────────────── */}
           {env && (
             <Section
@@ -554,8 +653,6 @@ export default function SettingsPage() {
               description="Read from environment variables — edit .env to change these"
             >
               {[
-                ['LLM_MODEL', env.llm_model],
-                ['LLM_PROVIDER', env.llm_provider],
                 ['PYTHON_BIN', env.python_bin],
                 ['PIPELINE_ROOT', env.pipeline_root],
               ].map(([key, val]) => (

@@ -31,7 +31,8 @@
             "Pure Sanskritized Hindi medical terms (madhumeh, raktachaap, hriday, etc.) are NOT understood by modern audiences and must NOT be used.",
             "If a technical term is unfamiliar in any form, briefly explain it in plain Hindi on first use — but still use the common spoken form, not a Sanskrit equivalent.",
             "Never use jargon without explanation. Every term introduced must have context from the surrounding sentence.",
-            "Avoid passive constructions — prefer active, direct phrasing."
+            "Avoid passive constructions — prefer active, direct phrasing.",
+            "For statistics, always convert to simple percentages or plain fractions that a layperson understands — '22% कम risk' or '3 गुना ज़्यादा'. Never say 'RR', 'OR', 'HR', 'SMD', 'confidence interval', or 'p-value' in the spoken script. Pick at most 2-3 numbers total."
         ]
     },
     "script": {
@@ -61,7 +62,7 @@
                 "name": "finding",
                 "duration_seconds": 40,
                 "target_word_count": 120,
-                "purpose": "The core result with exact numbers, AND a full plain-language explanation of what it means for a normal person. CRITICAL: Name each specific intervention by its exact name (e.g. 'Mediterranean diet', 'aerobic exercise', '7-8 ghante ki neend', 'omega-3') — never just say 'lifestyle changes' or 'healthy habits' without specifying what those are. Cover: (1) what the study found with precise numbers and named interventions, (2) what this means in practical terms — how it could improve, worsen, or change someone's daily life, energy, health, or longevity, (3) the biological or behavioural mechanism in simple words (why does this happen?), (4) who benefits most and who may not. This is the heart of the video — do not rush it. Use relatable analogies."
+                "purpose": "The core result with exact numbers, AND a full plain-language explanation of what it means for a normal person. CRITICAL: Name each specific intervention by its exact name (e.g. 'Mediterranean diet', 'aerobic exercise', '7-8 ghante ki neend', 'omega-3') — never just say 'lifestyle changes' or 'healthy habits' without specifying what those are. Cover: (1) what the study found with the 1-2 most striking percentages (never raw RR/OR/SMD notation) and named interventions, (2) what this means in practical terms — how it could improve, worsen, or change someone's daily life, energy, health, or longevity, (3) the biological or behavioural mechanism in simple words (why does this happen?), (4) who benefits most and who may not. This is the heart of the video — do not rush it. Use relatable analogies."
             },
             {
                 "name": "caveat",

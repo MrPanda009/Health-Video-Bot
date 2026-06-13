@@ -39,21 +39,28 @@ LLM_MODEL          = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
 LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "auto").lower()
 
 
+# OpenAI-compatible providers: provider -> (base_url, api_key_env_var)
+_OPENAI_COMPAT = {
+    "groq":       ("https://api.groq.com/openai/v1",       "GROQ_API_KEY"),
+    "nvidia":     ("https://integrate.api.nvidia.com/v1",  "NVIDIA_API_KEY"),
+    "openrouter": ("https://openrouter.ai/api/v1",         "OPENROUTER_API_KEY"),
+}
+
+
 def _get_llm_client():
     """Return (provider_name, client) based on LLM_MODEL / LLM_PROVIDER env vars."""
-    model = LLM_MODEL.lower()
-    if model.startswith("claude"):
+    provider = LLM_PROVIDER
+    if provider == "auto":
+        provider = "anthropic" if LLM_MODEL.lower().startswith("claude") else "openai"
+    if provider == "anthropic":
         import anthropic
         return "anthropic", anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-    elif LLM_PROVIDER == "groq":
+    if provider in _OPENAI_COMPAT:
+        base_url, key_env = _OPENAI_COMPAT[provider]
         from openai import OpenAI
-        return "groq", OpenAI(
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url="https://api.groq.com/openai/v1",
-        )
-    else:
-        from openai import OpenAI
-        return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        return provider, OpenAI(api_key=os.getenv(key_env), base_url=base_url)
+    from openai import OpenAI
+    return "openai", OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 # ─── Pydantic model for extracted claims ─────────────────────────────────────
@@ -68,7 +75,7 @@ class ClaimsBlock(BaseModel):
     )
     effect_size: Optional[str] = Field(
         default=None,
-        description="Exact effect size with units as written. E.g. '23% reduction', 'HR 0.78 (95% CI 0.65-0.94)'. Null if not reported."
+        description="Effect size phrased in plain language (e.g. '22% reduction'). Convert raw notation (RR, OR, HR, CI) into simple percentages or fractions. Null if not reported."
     )
     sample_size: Optional[int] = Field(
         default=None,
@@ -91,7 +98,7 @@ class ClaimsBlock(BaseModel):
     )
     key_stats: list[str] = Field(
         default_factory=list,
-        description="Up to 4 additional statistics or findings worth mentioning. Each as a short string."
+        description="Up to 4 additional statistics worth mentioning. Each MUST be phrased in plain language using percentages or simple fractions — e.g. '22% lower heart disease risk' not 'RR = 0.78'. Never use RR, OR, HR, SMD, CI notation — always translate to '% lower/higher' or 'X times more likely'. Pick only the most impactful 4."
     )
     specific_interventions: list[str] = Field(
         default_factory=list,
@@ -141,6 +148,13 @@ class ClaimsBlock(BaseModel):
         if not v or not v.strip():
             raise ValueError("what_study_does_not_prove must not be empty")
         return v.strip()
+
+    @field_validator("key_stats")
+    @classmethod
+    def cap_key_stats(cls, v):
+        if len(v) > 4:
+            return v[:4]  # Silently truncate — the prompt already says "up to 4"
+        return v
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -209,13 +223,13 @@ FULL TEXT EXCERPT (prefer these numbers over the abstract for precise statistics
 CRITICAL RULES:
 - Extract ONLY what is EXPLICITLY stated in the provided text. Do not infer, extrapolate, or add outside knowledge.
 - If a field is not mentioned, set it to null (or empty list for arrays).
-- For effect_size: copy the exact number and units as written. Prefer full-text tables over abstract summaries.
+- For effect_size: phrase it in plain language (e.g. '23% lower risk'). Convert any raw RR/OR/HR/CI notation into simple terms understandable by a layperson. Prefer full-text tables over abstract summaries.
 - For sample_size: extract the total N. For meta-analyses, look for total participants across studies.
 - For what_study_does_not_prove: write one clear sentence. Guidance: {type_guidance}
 - Do NOT mention the study's positive findings in what_study_does_not_prove — focus on its limits.
 - For industry_funded: only set True if the text EXPLICITLY mentions commercial/industry funding.
 - For methodology_summary: 1-2 sentences describing design, blinding, recruitment, and setting. Null if not enough info.
-- For key_stats: include p-values, confidence intervals, and secondary outcomes from results tables if available.
+- For key_stats: pick the 4 MOST impactful secondary results. Each stat MUST be phrased in plain language — e.g. '22% lower heart disease risk', '33% less frailty', not 'RR = 0.78' or 'OR = 0.72'. Never include raw RR, OR, HR, SMD, or CI notation — always convert to percentages or simple fractions that a non-scientist would understand. Maximum 4 items.
 - For specific_interventions: list ONLY explicitly named interventions, exposures, or behaviors studied (e.g. 'Mediterranean diet', 'aerobic exercise 150 min/week', '7-8 hours sleep', 'omega-3 supplementation'). Each item must be a concrete named thing from the text — not 'lifestyle changes', 'healthy habits', or 'behavioral modifications'. Leave the list EMPTY if the abstract does not name specific interventions.
 
 STUDY DETAILS:
@@ -262,14 +276,25 @@ def call_llm(prompt: str, attempt: int = 1) -> str:
         )
         return response.content[0].text
     else:
-        response = client.chat.completions.create(
+        kwargs = dict(
             model=LLM_MODEL,
-            max_tokens=1024,
+            max_tokens=4096,  # headroom for reasoning models (gpt-oss etc.)
             temperature=0.1,
             response_format={"type": "json_object"},
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.choices[0].message.content
+        # Reasoning models emit chain-of-thought tokens that share the max_tokens
+        # budget — keep effort low so the JSON body isn't truncated.
+        if "gpt-oss" in LLM_MODEL.lower():
+            kwargs["reasoning_effort"] = "low"
+        response = client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            raise RuntimeError(
+                "Response truncated (hit max_tokens) before the JSON was complete — "
+                "raise max_tokens or pick a model that reasons less."
+            )
+        return choice.message.content
 
 
 def parse_llm_response(raw: str) -> dict:
@@ -353,6 +378,18 @@ def validate_claims(claims: ClaimsBlock, study: dict, profile: dict) -> list[str
         warnings.append(
             "No specific_interventions extracted — script may fall back to vague language. "
             "Stage 3 must name interventions explicitly from core_finding and key_stats."
+        )
+
+    # Warn if key_stats contain raw statistical notation
+    jargon_patterns = ["RR ", "OR ", "HR ", "SMD ", "CI ", "p = ", "p < ", "p=", "p<", "RR=", "OR=", "HR=", "SMD="]
+    jargon_stats = [
+        s for s in claims.key_stats
+        if any(j in s.upper() for j in [p.upper() for p in jargon_patterns])
+    ]
+    if jargon_stats:
+        warnings.append(
+            f"key_stats contain raw statistical notation: {jargon_stats}. "
+            f"These should be plain-language — '22% lower risk' not 'RR = 0.78'."
         )
 
     return warnings

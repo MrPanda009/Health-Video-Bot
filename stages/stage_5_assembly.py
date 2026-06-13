@@ -408,14 +408,12 @@ def render_with_remotion(
     print(f"[Stage 5] Running Remotion render ({props['width']}×{props['height']}, "
           f"{total_frames} frames @ {props['fps']}fps)…")
 
-    # Remotion emits frame progress lines like "Rendered 45/1547 frames (45%)"
-    # and bundling lines like "Bundled in 3s (100%)". We only want frame rendering
-    # progress, so we match on the frame-count pattern first; the bare % fallback
-    # is guarded to exclude lines that contain "bundle" (case-insensitive).
-    _frame_re = re.compile(r"Rendered\s+(\d+)\s*/\s*(\d+)\s+frames", re.IGNORECASE)
-    _pct_re   = re.compile(r"\b(\d{1,3})%")
-    last_pct  = -1
-    rendering_started = False
+    # Remotion's render progress is newline-delimited. The bundling phase emits its
+    # own "Bundling NN%" lines (which the old bare-% regex mistook for render
+    # progress and jumped the bar to 100% instantly). Real frame progress arrives as
+    # "Rendered <done>/<total>" — we key on that exclusively.
+    _frame_re = re.compile(r"Rendered\s+(\d+)\s*/\s*(\d+)")
+    last_pct = -1
 
     with _local_asset_server() as base_url:
         http_props = _remap_paths(props, base_url)
@@ -428,27 +426,15 @@ def render_with_remotion(
             text=True,
         )
         for line in proc.stdout:  # type: ignore[union-attr]
-            fm = _frame_re.search(line)
-            if fm:
-                rendering_started = True
-                rendered_frames = int(fm.group(1))
-                pct = round(rendered_frames * 100 / total_frames)
+            m = _frame_re.search(line)
+            if m:
+                rendered, total = int(m.group(1)), int(m.group(2))
+                pct = round(rendered * 100 / max(total, 1))
                 if pct != last_pct:
                     last_pct = pct
-                    _print_render_progress(pct, total_frames)
-            else:
-                # Only use bare-% lines once we know rendering has started,
-                # and never from bundling output.
-                line_lower = line.lower()
-                if rendering_started and "bundle" not in line_lower:
-                    m = _pct_re.search(line)
-                    if m:
-                        pct = int(m.group(1))
-                        if 0 <= pct <= 100 and pct > last_pct:
-                            last_pct = pct
-                            _print_render_progress(pct, total_frames)
-                if verbose:
-                    print(line, end="")
+                    _print_render_progress(pct, total)
+            elif verbose:
+                print(line, end="")
         proc.wait()
 
     if last_pct >= 0:

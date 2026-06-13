@@ -3,20 +3,30 @@
 import useSWR from 'swr'
 import type { AppSettings, AssemblySettings, AudioSettings, PipelineSettings } from '@/lib/types'
 
+export type EnvPatch = {
+  LLM_PROVIDER?: string
+  LLM_MODEL?: string
+  keys?: Record<string, string>
+}
+
 export type SettingsPatch = {
   assembly?: Partial<AssemblySettings>
   pipeline?: Partial<PipelineSettings>
   audio?: Partial<AudioSettings>
+  env?: EnvPatch
+}
+
+export interface SettingsEnv {
+  llm_model: string
+  llm_provider: string
+  pipeline_root: string
+  python_bin: string
+  keys: Record<string, boolean>
 }
 
 interface SettingsResponse {
   settings: AppSettings
-  env: {
-    llm_model: string
-    llm_provider: string
-    pipeline_root: string
-    python_bin: string
-  }
+  env: SettingsEnv
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -36,12 +46,12 @@ export function useSettings() {
         body: JSON.stringify(patch),
       })
       if (!res.ok) return null
-      const updated: AppSettings = await res.json()
+      const updated: SettingsResponse = await res.json()
       await mutate(
-        (prev) => prev ? { ...prev, settings: updated } : prev,
+        (prev) => prev ? { ...prev, ...updated } : updated,
         { revalidate: false },
       )
-      return updated
+      return updated.settings
     } catch {
       return null
     }
