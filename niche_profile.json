@@ -156,7 +156,7 @@
         "tts_provider": "sarvam_ai",
         "sarvam_voice_id": "aayan",
         "sarvam_model": "bulbul:v3",
-        "speaking_rate": 1.3,
+        "speaking_rate": 1.2,
         "pitch": 0,
         "loudness": 1.5,
         "background_music": {
