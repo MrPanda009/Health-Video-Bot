@@ -93,6 +93,10 @@ class ClaimsBlock(BaseModel):
         default_factory=list,
         description="Up to 4 additional statistics or findings worth mentioning. Each as a short string."
     )
+    specific_interventions: list[str] = Field(
+        default_factory=list,
+        description="Explicit, named interventions, exposures, or behaviors studied. Each must be a concrete, named thing (e.g. 'Mediterranean diet', 'aerobic exercise 150 min/week', '7-8 hours sleep', 'omega-3 supplementation'). If the study just says 'lifestyle changes' without specifying, leave this empty. Never include vague umbrella terms."
+    )
     industry_funded: Optional[bool] = Field(
         default=None,
         description="True if abstract mentions industry/commercial funding. False if explicitly states no COI. Null if not mentioned."
@@ -212,6 +216,7 @@ CRITICAL RULES:
 - For industry_funded: only set True if the text EXPLICITLY mentions commercial/industry funding.
 - For methodology_summary: 1-2 sentences describing design, blinding, recruitment, and setting. Null if not enough info.
 - For key_stats: include p-values, confidence intervals, and secondary outcomes from results tables if available.
+- For specific_interventions: list ONLY explicitly named interventions, exposures, or behaviors studied (e.g. 'Mediterranean diet', 'aerobic exercise 150 min/week', '7-8 hours sleep', 'omega-3 supplementation'). Each item must be a concrete named thing from the text — not 'lifestyle changes', 'healthy habits', or 'behavioral modifications'. Leave the list EMPTY if the abstract does not name specific interventions.
 
 STUDY DETAILS:
 Title: {study.get('title', '')}
@@ -234,6 +239,7 @@ Respond with ONLY a valid JSON object. No explanation, no markdown, no backticks
   "primary_limitations": ["string", ...],
   "what_study_does_not_prove": "string — what this study cannot conclude",
   "key_stats": ["string", ...],
+  "specific_interventions": ["string", ...],
   "industry_funded": true/false/null,
   "funding_source": "string or null",
   "methodology_summary": "string or null — 1-2 sentences: design, blinding, recruitment, setting"
@@ -343,6 +349,12 @@ def validate_claims(claims: ClaimsBlock, study: dict, profile: dict) -> list[str
     if not claims.primary_limitations:
         warnings.append("No limitations in abstract — Stage 3 must derive from study type")
 
+    if not claims.specific_interventions:
+        warnings.append(
+            "No specific_interventions extracted — script may fall back to vague language. "
+            "Stage 3 must name interventions explicitly from core_finding and key_stats."
+        )
+
     return warnings
 
 
@@ -437,6 +449,7 @@ def run(job_id: str) -> dict:
     print(f"  Causal safe   : {claims.is_causal_language_safe}")
     print(f"  Small study   : {claims.small_study_flag}")
     print(f"  Industry fund : {claims.industry_funded_flag}")
+    print(f"  Interventions : {len(claims.specific_interventions)} ({', '.join(claims.specific_interventions[:3])}{'...' if len(claims.specific_interventions) > 3 else ''})")
     print(f"  Warnings      : {len(warnings)}")
 
     return job

@@ -174,7 +174,7 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
     # Build segment instructions from profile
     segments = profile["script"]["segment_structure"]
     segment_instructions = "\n".join([
-        f"  - {s['name']} ({s['duration_seconds']}s): {s['purpose']}"
+        f"  - {s['name']} ({s['duration_seconds']}s, ~{s.get('target_word_count', '?')} words): {s['purpose']}"
         for s in segments
     ])
 
@@ -271,15 +271,16 @@ Journal:    {study.get('journal', '')} ({study.get('year', '')})
 PMID:       {study.get('pmid', '')}
 Study type: {study.get('study_type', '')}
 
-Core finding:          {claims.get('core_finding', '')}
-Effect size:           {claims.get('effect_size') or 'not reported in abstract'}
-Sample size:           {claims.get('sample_size') or 'not stated in abstract'}
-Population:            {claims.get('population_description') or 'not specified'}
-Follow-up:             {claims.get('follow_up_duration') or 'not stated'}
-Study design:          {claims.get('methodology_summary') or 'see abstract'}
+Core finding:           {claims.get('core_finding', '')}
+Effect size:            {claims.get('effect_size') or 'not reported in abstract'}
+Sample size:            {claims.get('sample_size') or 'not stated in abstract'}
+Population:             {claims.get('population_description') or 'not specified'}
+Follow-up:              {claims.get('follow_up_duration') or 'not stated'}
+Study design:           {claims.get('methodology_summary') or 'see abstract'}
 What it does NOT prove: {claims.get('what_study_does_not_prove', '')}
-Key limitations:       {'; '.join(claims.get('primary_limitations', [])) or 'not stated in abstract'}
-Additional stats:      {'; '.join(claims.get('key_stats', [])) or 'none'}
+Key limitations:        {'; '.join(claims.get('primary_limitations', [])) or 'not stated in abstract'}
+Additional stats:       {'; '.join(claims.get('key_stats', [])) or 'none'}
+Specific interventions: {', '.join(claims.get('specific_interventions', [])) or 'NOT EXTRACTED — derive from abstract text'}
 
 ORIGINAL ABSTRACT (for authentic phrasing and context):
 {study.get('abstract', '')}
@@ -439,7 +440,9 @@ IMPORTANT REMINDERS before you write:
 4. The sample size ({claims.get('sample_size') or 'unknown'}) must be mentioned somewhere in the script
 5. Thumbnail prompts must be in English (for image generation APIs)
 6. B-roll search terms must be in English (for Pexels/Pixabay)
-7. Title and description must be in Hindi (or bilingual for description){below_minimum_reminder}"""
+7. Title and description must be in Hindi (or bilingual for description)
+8. SPECIFICITY RULE: The finding segment MUST name each specific intervention individually by name (e.g. 'Mediterranean diet', 'aerobic exercise', '7-8 ghante ki neend'). Never say 'lifestyle changes', 'healthy habits', or 'behtar jeevan shaili' without naming EXACTLY what those changes are. The specific interventions from this study are: {', '.join(claims.get('specific_interventions', [])) or 'derive these from the abstract above'}.
+9. WORD COUNT RULE: The total hindi_script must be at least {profile['script']['minimum_word_count']} words. Target {profile['script']['target_word_count_hindi']} words. Each segment has a target: {'; '.join(f"{s['name']} ~{s.get('target_word_count', '?')} words" for s in profile['script']['segment_structure'])}. The finding segment is the most important — write it fully, do not truncate.{below_minimum_reminder}"""
 
 
 # ─── LLM call ─────────────────────────────────────────────────────────────────
@@ -529,6 +532,42 @@ def validate_content(content: ContentBlock, claims: dict, profile: dict) -> list
         if has_devanagari:
             notes.append(f"Thumbnail prompt '{tp.variant_id}' appears to be in Hindi — must be English for image APIs")
 
+    # ── Specificity check (soft warning) ────────────────────────────────────
+    # If Stage 2 extracted named interventions, at least half should appear in
+    # the finding segment. English terms stay Roman in Devanagari text so we
+    # can match them directly.
+    specific_interventions = claims.get("specific_interventions", [])
+    if specific_interventions:
+        finding_segs = [s for s in content.script_segments if s.name == "finding"]
+        finding_text = finding_segs[0].hindi_text.lower() if finding_segs else ""
+        combined_text = (finding_text + " " + script).lower()
+        found_count = sum(
+            1 for iv in specific_interventions
+            # Match any keyword from the intervention phrase (e.g. "Mediterranean" from "Mediterranean diet")
+            if any(kw.lower() in combined_text for kw in iv.split() if len(kw) > 3)
+        )
+        threshold = max(1, len(specific_interventions) // 2)
+        if found_count < threshold:
+            missing = [
+                iv for iv in specific_interventions
+                if not any(kw.lower() in combined_text for kw in iv.split() if len(kw) > 3)
+            ]
+            notes.append(
+                f"[QUALITY:SPECIFICITY] Only {found_count}/{len(specific_interventions)} specific interventions "
+                f"found in script (threshold: {threshold}). Missing: {missing}. "
+                f"The finding segment must name each intervention individually."
+            )
+
+    # ── Word count check (soft warning) ─────────────────────────────────────
+    word_count = len(content.hindi_script.split())
+    min_words = profile["script"].get("minimum_word_count", 200)
+    if word_count < min_words:
+        notes.append(
+            f"[QUALITY:WORDCOUNT] Script has {word_count} words, below minimum of {min_words}. "
+            f"Target is {profile['script']['target_word_count_hindi']} words. "
+            f"Expand the finding segment — it should be ~{next((s.get('target_word_count', 120) for s in profile['script']['segment_structure'] if s['name'] == 'finding'), 120)} words."
+        )
+
     return notes
 
 
@@ -566,52 +605,105 @@ def run(job_id: str) -> dict:
 
     print(f"[Stage 3] Generating content for: {study['title'][:55]}...")
     print(f"[Stage 3] Study type: {study['study_type']} | Causal safe: {claims.get('is_causal_language_safe')}")
+    print(f"[Stage 3] Specific interventions: {claims.get('specific_interventions', [])}")
 
-    # ── LLM content generation with one retry ────────────────────────────────
-    prompt  = build_content_prompt(study, claims, profile)
-    content = None
-    retries = 0
+    # ── LLM content generation: up to 2 parse/schema attempts + 1 quality retry
+    #
+    # Strategy:
+    #   - Inner loop (2 attempts): handles JSON / Pydantic validation failures
+    #   - Outer quality pass (max 2): if content passes schema but has QUALITY
+    #     issues (specificity or word count), we retry once with targeted feedback.
+    # ─────────────────────────────────────────────────────────────────────────
+    base_prompt   = build_content_prompt(study, claims, profile)
+    prompt        = base_prompt
+    content       = None
+    retries       = 0
+    quality_notes = []
 
-    for attempt in range(1, 3):
-        try:
-            raw    = call_llm(prompt, attempt=attempt)
-            parsed = parse_llm_response(raw)
-            content = ContentBlock(**parsed)
+    for quality_pass in range(1, 3):  # at most 2 quality passes (initial + 1 retry)
+
+        # ── Inner loop: JSON/schema validation ───────────────────────────────
+        for attempt in range(1, 3):
+            try:
+                raw     = call_llm(prompt, attempt=attempt)
+                parsed  = parse_llm_response(raw)
+                content = ContentBlock(**parsed)
+                break
+
+            except json.JSONDecodeError as e:
+                print(f"[Stage 3] JSON parse error (pass {quality_pass}, attempt {attempt}): {e}")
+                if attempt == 2:
+                    return mark_error(job, f"LLM returned invalid JSON after 2 attempts: {e}", retries=retries)
+                prompt += f"\n\nYour previous response was not valid JSON. Error: {e}. Respond with ONLY a valid JSON object."
+                retries += 1
+
+            except Exception as e:
+                print(f"[Stage 3] Validation error (pass {quality_pass}, attempt {attempt}): {e}")
+                if attempt == 2:
+                    return mark_error(job, f"Content validation failed after 2 attempts: {e}", retries=retries)
+                prompt += f"\n\nValidation failed: {e}. Fix the issue and respond with a corrected JSON object."
+                retries += 1
+
+        if content is None:
+            return mark_error(job, "Content generation failed — content is None after retry loop", retries=retries)
+
+        # ── Post-generation safety + quality validation ───────────────────────
+        quality_notes = validate_content(content, claims, profile)
+
+        # Critical: abort immediately if causal language in observational study
+        if not claims.get("is_causal_language_safe"):
+            critical = [n for n in quality_notes if "Causal language found" in n]
+            if critical:
+                return mark_error(
+                    job,
+                    f"Critical: causal language found in script for observational study. "
+                    f"Re-run Stage 3 or edit the script manually. Notes: {critical}"
+                )
+
+        # Check for quality issues eligible for retry
+        quality_issues = [n for n in quality_notes if n.startswith("[QUALITY:")]
+        if not quality_issues or quality_pass == 2:
+            # No quality issues, or we've already retried — accept result
             break
 
-        except json.JSONDecodeError as e:
-            print(f"[Stage 3] JSON parse error (attempt {attempt}): {e}")
-            if attempt == 2:
-                return mark_error(job, f"LLM returned invalid JSON after 2 attempts: {e}", retries=2)
-            prompt += f"\n\nYour previous response was not valid JSON. Error: {e}. Respond with ONLY a valid JSON object."
-            retries += 1
+        # ── Quality retry: append targeted feedback and go again ─────────────
+        print(f"[Stage 3] Quality issues found (pass {quality_pass}) — retrying with feedback:")
+        for issue in quality_issues:
+            print(f"  ⚠  {issue}")
 
-        except Exception as e:
-            print(f"[Stage 3] Validation error (attempt {attempt}): {e}")
-            if attempt == 2:
-                return mark_error(job, f"Content validation failed after 2 attempts: {e}", retries=2)
-            prompt += f"\n\nValidation failed: {e}. Fix the issue and respond with a corrected JSON object."
-            retries += 1
+        feedback_lines = [
+            "\n\nYour previous response had quality issues. Please rewrite the full JSON with these fixes:"
+        ]
+        for issue in quality_issues:
+            if "QUALITY:SPECIFICITY" in issue:
+                feedback_lines.append(
+                    f"- SPECIFICITY: {issue.split(chr(93) + chr(32), 1)[-1]} "
+                    f"Name every intervention explicitly in the finding segment. Do not use umbrella phrases."
+                )
+            elif "QUALITY:WORDCOUNT" in issue:
+                target_wc = next(
+                    (s.get("target_word_count", 120)
+                     for s in profile["script"]["segment_structure"]
+                     if s["name"] == "finding"),
+                    120
+                )
+                feedback_lines.append(
+                    f"- WORD COUNT: {issue.split(chr(93) + chr(32), 1)[-1]} "
+                    f"Write more for the finding segment — it needs ~{target_wc} words alone."
+                )
 
-    # ── Post-generation safety validation ────────────────────────────────────
-    notes = validate_content(content, claims, profile)
+        prompt  = base_prompt + "\n".join(feedback_lines)
+        content = None   # Reset so we don't use stale content on next pass
+        retries += 1
 
-    # Critical violations — abort if causal language found in observational study
-    if not claims.get("is_causal_language_safe"):
-        critical = [n for n in notes if "Causal language found" in n]
-        if critical:
-            return mark_error(
-                job,
-                f"Critical: causal language found in script for observational study. "
-                f"Re-run Stage 3 or edit the script manually. Notes: {critical}"
-            )
+    # ── Log all notes ─────────────────────────────────────────────────────────
+    if quality_notes:
+        print(f"[Stage 3] {len(quality_notes)} content note(s):")
+        for n in quality_notes:
+            prefix = "  ⚠ " if n.startswith("[QUALITY:") else "  ℹ "
+            print(f"{prefix}{n}")
 
-    if notes:
-        print(f"[Stage 3] {len(notes)} content note(s):")
-        for n in notes:
-            print(f"  ℹ  {n}")
-
-    content.validation_notes = notes
+    content.validation_notes = quality_notes
 
     # ── Write to job state ────────────────────────────────────────────────────
     job["content"] = content.model_dump()
@@ -624,7 +716,7 @@ def run(job_id: str) -> dict:
     print(f"  Segments     : {len(content.script_segments)}")
     print(f"  Tags         : {len(content.tags)}")
     print(f"  Thumbnails   : {len(content.thumbnail_prompts)}")
-    print(f"  Notes        : {len(notes)}")
+    print(f"  Notes        : {len(quality_notes)}")
 
     # Print the script for review
     print(f"\n{'─'*60}")

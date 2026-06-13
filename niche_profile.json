@@ -37,11 +37,13 @@
     "script": {
         "format": "short_form",
         "target_duration_seconds": 90,
-        "target_word_count_hindi": 220,
+        "target_word_count_hindi": 280,
+        "minimum_word_count": 200,
         "segment_structure": [
             {
                 "name": "hook",
                 "duration_seconds": 8,
+                "target_word_count": 25,
                 "purpose": "Open with the core surprising finding as a direct statement or rhetorical question that immediately makes the viewer feel this matters to their life. Must reference the study. No generic openers like 'Aaj hum baat karenge'. Make it personal — why should THIS person watching care RIGHT NOW.",
                 "example_openings": [
                     "Ek naye shodh mein paaya gaya ki...",
@@ -52,26 +54,31 @@
             {
                 "name": "context",
                 "duration_seconds": 15,
+                "target_word_count": 45,
                 "purpose": "Who conducted the study, how many people, what type of study, and crucially — WHY this research was done and what problem it was trying to solve. Explain what this condition or topic actually does to a person's daily life in simple terms before presenting the science. Build credibility through the journal and sample size."
             },
             {
                 "name": "finding",
                 "duration_seconds": 40,
-                "purpose": "The core result with exact numbers, AND a full plain-language explanation of what it means for a normal person. Cover: (1) what the study found with precise numbers, (2) what this means in practical terms — how it could improve, worsen, or change someone's daily life, energy, health, or longevity, (3) the biological or behavioural mechanism in simple words (why does this happen?), (4) who benefits most and who may not. This is the heart of the video — do not rush it. Use relatable analogies."
+                "target_word_count": 120,
+                "purpose": "The core result with exact numbers, AND a full plain-language explanation of what it means for a normal person. CRITICAL: Name each specific intervention by its exact name (e.g. 'Mediterranean diet', 'aerobic exercise', '7-8 ghante ki neend', 'omega-3') — never just say 'lifestyle changes' or 'healthy habits' without specifying what those are. Cover: (1) what the study found with precise numbers and named interventions, (2) what this means in practical terms — how it could improve, worsen, or change someone's daily life, energy, health, or longevity, (3) the biological or behavioural mechanism in simple words (why does this happen?), (4) who benefits most and who may not. This is the heart of the video — do not rush it. Use relatable analogies."
             },
             {
                 "name": "caveat",
                 "duration_seconds": 15,
+                "target_word_count": 45,
                 "purpose": "What the study does NOT prove. Who this may not apply to. Key limitations. Frame it as 'here is what we still don't know' rather than undermining the finding. Every video must have this. Be honest but constructive."
             },
             {
                 "name": "actionable_takeaway",
                 "duration_seconds": 8,
+                "target_word_count": 25,
                 "purpose": "One or two concrete, safe actions the viewer can take today based on the evidence. Make it specific and doable — not 'eat healthy' but 'replace your afternoon snack with X'. Frame as a suggestion. Never recommend stopping medications or substituting professional advice."
             },
             {
                 "name": "cta",
                 "duration_seconds": 4,
+                "target_word_count": 15,
                 "purpose": "Subscribe + comment CTA. Keep it natural, not robotic. One of the pre-approved CTA variants below.",
                 "cta_variants": [
                     "Agar yeh jaankari useful lagi, toh channel ko subscribe karein aur comment mein batayein ki aap kis topic par aur jaanna chahte hain.",
@@ -89,7 +96,8 @@
             "Never reference a study without mentioning sample size somewhere in the script",
             "Never open with 'Namaste doston, aaj ki video mein' or similar generic openers",
             "Never end with 'Toh yeh thi aaj ki jaankari' or similar filler closings",
-            "Never transliterate Hindi words into Roman script — Hindi words must always be Devanagari (never write 'aapko', always write 'आपको'). English words that modern Hindi speakers actually say out loud must stay in Roman script — this includes both medical terms AND common everyday English like 'study', 'diet', 'ok', 'basically'."
+            "Never transliterate Hindi words into Roman script — Hindi words must always be Devanagari (never write 'aapko', always write 'आपको'). English words that modern Hindi speakers actually say out loud must stay in Roman script — this includes both medical terms AND common everyday English like 'study', 'diet', 'ok', 'basically'.",
+            "Never use vague umbrella terms like 'lifestyle changes', 'healthy habits', or 'better choices' without immediately naming the specific behaviours — e.g. write 'Mediterranean diet, aerobic exercise, 7-8 ghante ki neend' not just 'lifestyle mein badlaav'. Every specific_intervention extracted from the study must be named individually in the script."
         ]
     },
     "visuals": {
