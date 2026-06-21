@@ -21,6 +21,7 @@ export interface SettingsEnv {
   llm_provider: string
   pipeline_root: string
   python_bin: string
+  cpu_count: number
   keys: Record<string, boolean>
 }
 

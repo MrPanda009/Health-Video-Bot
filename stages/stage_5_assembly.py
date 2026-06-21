@@ -82,8 +82,80 @@ def _local_asset_server():
     class _Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **kw):
             super().__init__(*a, directory="/", **kw)
+
         def log_message(self, *_):
             pass
+
+        def send_head(self):
+            import os
+            import re
+            path = self.translate_path(self.path)
+            if os.path.isdir(path):
+                return super().send_head()
+
+            ctype = self.guess_type(path)
+            try:
+                f = open(path, 'rb')
+            except OSError:
+                self.send_error(404, "File not found")
+                return None
+
+            try:
+                fs = os.fstat(f.fileno())
+                total_size = fs.st_size
+                
+                range_header = self.headers.get("Range")
+                if range_header:
+                    match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+                    if match:
+                        start = int(match.group(1))
+                        end_str = match.group(2)
+                        end = int(end_str) if end_str else total_size - 1
+
+                        if start >= total_size or end >= total_size or start > end:
+                            f.close()
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{total_size}")
+                            self.end_headers()
+                            return None
+
+                        self.send_response(206)
+                        self.send_header("Content-type", ctype)
+                        self.send_header("Content-Range", f"bytes {start}-{end}/{total_size}")
+                        self.send_header("Content-Length", str(end - start + 1))
+                        self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+                        self.send_header("Accept-Ranges", "bytes")
+                        self.end_headers()
+
+                        class RangeFileWrapper:
+                            def __init__(self, fileobj, start_byte, end_byte):
+                                self.fileobj = fileobj
+                                self.fileobj.seek(start_byte)
+                                self.remaining = end_byte - start_byte + 1
+
+                            def read(self, size=-1):
+                                if self.remaining <= 0:
+                                    return b""
+                                to_read = self.remaining if size < 0 else min(size, self.remaining)
+                                data = self.fileobj.read(to_read)
+                                self.remaining -= len(data)
+                                return data
+
+                            def close(self):
+                                self.fileobj.close()
+
+                        return RangeFileWrapper(f, start, end)
+
+                self.send_response(200)
+                self.send_header("Content-type", ctype)
+                self.send_header("Content-Length", str(total_size))
+                self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return f
+            except Exception:
+                f.close()
+                raise
 
     with socketserver.TCPServer(("127.0.0.1", port), _Handler) as httpd:
         httpd.allow_reuse_address = True
@@ -379,8 +451,14 @@ def render_with_remotion(
     output_path: Path,
     props_file: Path,
     verbose: bool = False,
+    concurrency: int = 0,
 ) -> None:
-    """Write props JSON and invoke `npx remotion render`."""
+    """Write props JSON and invoke `npx remotion render`.
+
+    `concurrency` is the number of frames Remotion renders in parallel. 0 means
+    "let remotion.config.ts decide" (it defaults to ~half the CPU cores); a
+    positive value is passed as `--concurrency=N` and overrides the config.
+    """
     if not _REMOTION_DIR.exists():
         raise FileNotFoundError(
             f"Remotion project not found at {_REMOTION_DIR}. "
@@ -405,8 +483,11 @@ def render_with_remotion(
         f"--props={props_file.resolve()}",
         f"--log={log_level}",
     ]
+    if concurrency and concurrency > 0:
+        cmd.append(f"--concurrency={concurrency}")
+    conc_label = f"{concurrency} workers" if concurrency and concurrency > 0 else "auto concurrency"
     print(f"[Stage 5] Running Remotion render ({props['width']}×{props['height']}, "
-          f"{total_frames} frames @ {props['fps']}fps)…")
+          f"{total_frames} frames @ {props['fps']}fps, {conc_label})…")
 
     # Remotion's render progress is newline-delimited. The bundling phase emits its
     # own "Bundling NN%" lines (which the old bare-% regex mistook for render
@@ -456,6 +537,7 @@ def assemble_video(
     transition_duration: float = 0.4,
     click_sound: str | None = None,
     bell_sound: str | None = None,
+    concurrency: int = 0,
 ) -> Path:
     """
     Assemble the final video using Remotion.
@@ -492,7 +574,7 @@ def assemble_video(
         bell_sound=bell_sound,
     )
 
-    render_with_remotion(props, output_path, props_file, verbose=False)
+    render_with_remotion(props, output_path, props_file, verbose=False, concurrency=concurrency)
     return output_path
 
 
@@ -554,6 +636,7 @@ def run(
     transition_duration: float = 0.4,
     click_sound: str | None = None,
     bell_sound: str | None = None,
+    concurrency: int = 0,
 ) -> dict:
     profile = load_niche_profile()
     job     = load_job(job_id)
@@ -597,6 +680,7 @@ def run(
             transition_duration=transition_duration,
             click_sound=click_sound,
             bell_sound=bell_sound,
+            concurrency=concurrency,
         )
     except FileNotFoundError as e:
         return mark_error(job, str(e))
@@ -660,6 +744,11 @@ if __name__ == "__main__":
         "--bell-sound", default=None,
         help="Filename in assets/music/ for the subscribe-button bell sound",
     )
+    parser.add_argument(
+        "--concurrency", type=int, default=0,
+        help="Number of frames Remotion renders in parallel. "
+             "0 = auto (remotion.config.ts default, ~half the CPU cores).",
+    )
     parsed = parser.parse_args()
 
     transitions_enabled = parsed.transition_type == "crossfade"
@@ -701,6 +790,7 @@ if __name__ == "__main__":
         transition_duration=transition_duration,
         click_sound=parsed.click_sound,
         bell_sound=parsed.bell_sound,
+        concurrency=parsed.concurrency,
     )
     print(f"\nFinal status : {result['status']}")
     if result.get("error"):

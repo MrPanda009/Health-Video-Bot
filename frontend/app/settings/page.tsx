@@ -563,6 +563,33 @@ export default function SettingsPage() {
                 </div>
               }
             />
+
+            {/* Render concurrency — frames Remotion renders in parallel (Stage 5) */}
+            {(() => {
+              const cpuCount = env?.cpu_count ?? 8
+              const autoVal = Math.max(1, Math.floor(cpuCount / 2))
+              return (
+                <SettingRowWide
+                  label="Render concurrency"
+                  description={`Frames Remotion renders in parallel in Stage 5. Higher = faster, but uses more CPU and memory. Detected ${cpuCount} cores — “Auto” uses ${autoVal} (half). Drag to 0 for Auto.`}
+                >
+                  <RangeSlider
+                    value={p.render_concurrency}
+                    min={0}
+                    max={cpuCount}
+                    step={1}
+                    onChange={(v) =>
+                      setOverrides((prev: SettingsOverrides) => ({
+                        ...prev,
+                        pipeline: { ...(prev.pipeline ?? {}), render_concurrency: v },
+                      }))
+                    }
+                    onCommit={(v) => patchPipeline({ render_concurrency: v })}
+                    format={(v) => (v === 0 ? 'Auto' : String(v))}
+                  />
+                </SettingRowWide>
+              )
+            })()}
           </Section>
 
           {/* ── LLM Provider ─────────────────────────────────────────────────── */}
@@ -688,7 +715,7 @@ export default function SettingsPage() {
                     : '--transition-type none'} \
                   {'\n'}  {a.animations_enabled
                     ? `--animation-type ${a.animation_type}`
-                    : '--animation-type none'}
+                    : '--animation-type none'}{p.render_concurrency > 0 ? ` \\\n  --concurrency ${p.render_concurrency}` : ''}
                 </pre>
               </div>
               <div>

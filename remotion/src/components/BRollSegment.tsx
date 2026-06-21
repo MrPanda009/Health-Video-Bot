@@ -45,36 +45,36 @@ export const BRollSegment: React.FC<Props> = ({
   const kenBurnsScale =
     animationType === "ken_burns"
       ? interpolate(frame, [0, durationInFrames], [1, 1.15], {
-          extrapolateRight: "clamp",
-        })
+        extrapolateRight: "clamp",
+      })
       : 1;
 
   const zoomPunchScale =
     animationType === "zoom_punch"
       ? interpolate(frame, [0, durationInFrames], [0.95, 1.05], {
-          extrapolateRight: "clamp",
-        })
+        extrapolateRight: "clamp",
+      })
       : 1;
 
   const slideTranslateX =
     animationType === "slide_in"
       ? (() => {
-          const slideFrames = Math.round(fps * 0.3);
-          const outStart = durationInFrames - slideFrames;
-          if (frame < slideFrames) {
-            return interpolate(frame, [0, slideFrames], [100, 0], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-            });
-          }
-          if (frame > outStart) {
-            return interpolate(frame, [outStart, durationInFrames], [0, -100], {
-              extrapolateLeft: "clamp",
-              extrapolateRight: "clamp",
-            });
-          }
-          return 0;
-        })()
+        const slideFrames = Math.round(fps * 0.3);
+        const outStart = durationInFrames - slideFrames;
+        if (frame < slideFrames) {
+          return interpolate(frame, [0, slideFrames], [100, 0], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          });
+        }
+        if (frame > outStart) {
+          return interpolate(frame, [outStart, durationInFrames], [0, -100], {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+          });
+        }
+        return 0;
+      })()
       : 0;
 
   const scale = kenBurnsScale * zoomPunchScale;

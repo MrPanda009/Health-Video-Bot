@@ -73,6 +73,11 @@ export async function GET(
     const aud = settings.audio
     if (aud?.subscribe_click_sound) args.push('--click-sound', aud.subscribe_click_sound)
     if (aud?.subscribe_bell_sound) args.push('--bell-sound', aud.subscribe_bell_sound)
+    // Render concurrency: 0 = auto (let remotion.config.ts decide ~half the cores)
+    const concurrency = settings.pipeline?.render_concurrency
+    if (typeof concurrency === 'number' && concurrency > 0) {
+      args.push('--concurrency', String(concurrency))
+    }
   } else {
     args = [scriptPath, jobId]
   }

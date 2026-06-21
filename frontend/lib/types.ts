@@ -267,6 +267,8 @@ export interface AssemblySettings {
 export interface PipelineSettings {
   default_render_mode: 'draft' | 'final'
   default_whisper_model: string
+  /** Frames Remotion renders in parallel in Stage 5. 0 = auto (~half the CPU cores). */
+  render_concurrency: number
 }
 
 export interface AudioSettings {

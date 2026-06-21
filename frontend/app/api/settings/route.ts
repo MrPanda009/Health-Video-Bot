@@ -1,4 +1,5 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import type { AppSettings } from '@/lib/types'
 
@@ -83,6 +84,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   pipeline: {
     default_render_mode: 'final',
     default_whisper_model: 'large-v2',
+    render_concurrency: 0, // 0 = auto (~half the CPU cores, decided by remotion.config.ts)
   },
   audio: {
     subscribe_click_sound: 'universfield-computer-mouse-click-352734.mp3',
@@ -122,6 +124,9 @@ function buildEnv() {
     llm_provider: get('LLM_PROVIDER', 'auto'),
     pipeline_root: PIPELINE_ROOT,
     python_bin: process.env.PYTHON_BIN ?? dotEnv['PYTHON_BIN'] ?? 'python3',
+    // Logical core count of the render host — drives the concurrency picker's max
+    // and its "Auto" default (~half the cores).
+    cpu_count: os.cpus().length,
     keys,
   }
 }
