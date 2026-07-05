@@ -80,6 +80,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     transitions_enabled: true,
     transition_type: 'crossfade',
     transition_duration: 0.4,
+    caption_combine_ms: 1500,
+    font_family: 'NotoSansDevanagari',
   },
   pipeline: {
     default_render_mode: 'final',

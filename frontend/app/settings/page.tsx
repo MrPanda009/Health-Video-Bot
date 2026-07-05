@@ -478,6 +478,50 @@ export default function SettingsPage() {
                 />
               </div>
             </SettingRowWide>
+
+            {/* Caption combine ms (page switch speed) */}
+            <SettingRowWide
+              label="Caption page switch speed"
+              description="Max duration in milliseconds for words to stay grouped on screen before switching pages"
+            >
+              <RangeSlider
+                value={a.caption_combine_ms ?? 1500}
+                min={500}
+                max={3000}
+                step={100}
+                onChange={(v) =>
+                  setOverrides((prev: SettingsOverrides) => ({
+                    ...prev,
+                    assembly: { ...(prev.assembly ?? {}), caption_combine_ms: v },
+                  }))
+                }
+                onCommit={(v) => patchAssembly({ caption_combine_ms: v })}
+                format={(v) => `${v}ms`}
+              />
+            </SettingRowWide>
+
+            {/* Caption font family */}
+            <SettingRow
+              label="Caption font"
+              description="Font family used for the word-highlighted caption overlay"
+              control={
+                <div className="w-64">
+                  <Select
+                    value={a.font_family ?? 'NotoSansDevanagari'}
+                    onChange={(v) => patchAssembly({ font_family: v })}
+                    options={[
+                      { value: 'NotoSansDevanagari', label: 'Noto Sans Devanagari' },
+                      { value: 'Poppins', label: 'Poppins (Modern Sans-Serif)' },
+                      { value: 'AnekDevanagari', label: 'Anek Devanagari' },
+                      { value: 'Mukta', label: 'Mukta' },
+                      { value: 'TiroDevanagariHindi', label: 'Tiro Devanagari Hindi' },
+                      { value: 'Hind', label: 'Hind' },
+                      { value: 'SystemFont', label: 'System Fallback (No Google Font)' },
+                    ]}
+                  />
+                </div>
+              }
+            />
           </Section>
 
           {/* ── Subscribe Animation ──────────────────────────────────────────── */}
@@ -715,7 +759,9 @@ export default function SettingsPage() {
                     : '--transition-type none'} \
                   {'\n'}  {a.animations_enabled
                     ? `--animation-type ${a.animation_type}`
-                    : '--animation-type none'}{p.render_concurrency > 0 ? ` \\\n  --concurrency ${p.render_concurrency}` : ''}
+                    : '--animation-type none'} \
+                  {'\n'}  --caption-combine-ms {a.caption_combine_ms ?? 1500} \
+                  {'\n'}  --font-family {a.font_family ?? 'NotoSansDevanagari'}{p.render_concurrency > 0 ? ` \\\n  --concurrency ${p.render_concurrency}` : ''}
                 </pre>
               </div>
               <div>

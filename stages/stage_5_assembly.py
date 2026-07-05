@@ -331,6 +331,8 @@ def build_remotion_props(
     transition_duration: float = 0.4,
     click_sound: str | None = None,
     bell_sound: str | None = None,
+    caption_combine_ms: int = 1500,
+    font_family: str = "NotoSansDevanagari",
 ) -> dict:
     """Build the JSON props object consumed by the Remotion HealthVideoComposition."""
     video_w, video_h = _video_dims(job, draft=draft)
@@ -339,7 +341,7 @@ def build_remotion_props(
 
     voiceover_path = str(Path(assets["voiceover_path"]).resolve())
     vo_duration    = _voiceover_duration(voiceover_path)
-    total_frames   = round(vo_duration * FPS)
+    total_frames   = round((vo_duration + DISCLAIMER_DURATION) * FPS)
 
     # Disclaimer frames always prepended
     disclaimer_frames = DISCLAIMER_DURATION * FPS
@@ -436,6 +438,8 @@ def build_remotion_props(
         "bellSoundPath":        bell_sound_abs,
         "transitionsEnabled":   transitions_enabled,
         "transitionDurationFrames": round(transition_duration * FPS),
+        "captionCombineMs":     caption_combine_ms,
+        "fontFamily":           font_family,
     }
 
 
@@ -538,6 +542,8 @@ def assemble_video(
     click_sound: str | None = None,
     bell_sound: str | None = None,
     concurrency: int = 0,
+    caption_combine_ms: int = 1500,
+    font_family: str = "NotoSansDevanagari",
 ) -> Path:
     """
     Assemble the final video using Remotion.
@@ -572,6 +578,8 @@ def assemble_video(
         transition_duration=transition_duration,
         click_sound=click_sound,
         bell_sound=bell_sound,
+        caption_combine_ms=caption_combine_ms,
+        font_family=font_family,
     )
 
     render_with_remotion(props, output_path, props_file, verbose=False, concurrency=concurrency)
@@ -637,6 +645,8 @@ def run(
     click_sound: str | None = None,
     bell_sound: str | None = None,
     concurrency: int = 0,
+    caption_combine_ms: int = 1500,
+    font_family: str = "NotoSansDevanagari",
 ) -> dict:
     profile = load_niche_profile()
     job     = load_job(job_id)
@@ -681,6 +691,8 @@ def run(
             click_sound=click_sound,
             bell_sound=bell_sound,
             concurrency=concurrency,
+            caption_combine_ms=caption_combine_ms,
+            font_family=font_family,
         )
     except FileNotFoundError as e:
         return mark_error(job, str(e))
@@ -749,6 +761,14 @@ if __name__ == "__main__":
         help="Number of frames Remotion renders in parallel. "
              "0 = auto (remotion.config.ts default, ~half the CPU cores).",
     )
+    parser.add_argument(
+        "--caption-combine-ms", type=int, default=1500,
+        help="Max duration in ms for words to stay grouped on screen in captions"
+    )
+    parser.add_argument(
+        "--font-family", default="NotoSansDevanagari",
+        help="Google font submodule name to load for captions"
+    )
     parsed = parser.parse_args()
 
     transitions_enabled = parsed.transition_type == "crossfade"
@@ -791,6 +811,8 @@ if __name__ == "__main__":
         click_sound=parsed.click_sound,
         bell_sound=parsed.bell_sound,
         concurrency=parsed.concurrency,
+        caption_combine_ms=parsed.caption_combine_ms,
+        font_family=parsed.font_family,
     )
     print(f"\nFinal status : {result['status']}")
     if result.get("error"):

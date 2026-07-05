@@ -262,6 +262,8 @@ export interface AssemblySettings {
   transitions_enabled: boolean
   transition_type: 'crossfade'
   transition_duration: number
+  caption_combine_ms: number
+  font_family: string
 }
 
 export interface PipelineSettings {

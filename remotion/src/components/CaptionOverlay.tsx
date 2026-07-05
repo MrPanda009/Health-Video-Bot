@@ -1,54 +1,82 @@
-import React from "react";
-import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
+import React, { useMemo } from "react";
+import {
+  AbsoluteFill,
+  Sequence,
+  useCurrentFrame,
+  useVideoConfig,
+} from "remotion";
+import { createTikTokStyleCaptions } from "@remotion/captions";
+import type { Caption, TikTokPage } from "@remotion/captions";
 import { WordTimestamp } from "../types";
 
-interface WordChunk {
-  words: string[];
-  starts: number[]; // seconds
-  ends: number[];
-  chunkStart: number;
-  chunkEnd: number;
-}
+// Google Fonts imports
+import { loadFont as loadNotoSansDevanagari } from "@remotion/google-fonts/NotoSansDevanagari";
+import { loadFont as loadPoppins } from "@remotion/google-fonts/Poppins";
+import { loadFont as loadAnekDevanagari } from "@remotion/google-fonts/AnekDevanagari";
+import { loadFont as loadMukta } from "@remotion/google-fonts/Mukta";
+import { loadFont as loadTiroDevanagariHindi } from "@remotion/google-fonts/TiroDevanagariHindi";
+import { loadFont as loadHind } from "@remotion/google-fonts/Hind";
 
-function buildChunks(words: WordTimestamp[], maxWords = 5): WordChunk[] {
-  const chunks: WordChunk[] = [];
-  let i = 0;
-  while (i < words.length) {
-    const slice = words.slice(i, i + maxWords);
-    chunks.push({
-      words: slice.map((w) => w.word),
-      starts: slice.map((w) => w.start),
-      ends: slice.map((w) => w.end),
-      chunkStart: slice[0].start,
-      chunkEnd: slice[slice.length - 1].end,
-    });
-    i += maxWords;
+const fontLoaders: Record<string, () => string> = {
+  NotoSansDevanagari: () => loadNotoSansDevanagari("normal", { weights: ["400", "700"] }).fontFamily,
+  Poppins: () => loadPoppins("normal", { weights: ["400", "700"] }).fontFamily,
+  AnekDevanagari: () => loadAnekDevanagari("normal", { weights: ["400", "700"] }).fontFamily,
+  Mukta: () => loadMukta("normal", { weights: ["400", "700"] }).fontFamily,
+  TiroDevanagariHindi: () => loadTiroDevanagariHindi("normal", { weights: ["400"] }).fontFamily,
+  Hind: () => loadHind("normal", { weights: ["400", "700"] }).fontFamily,
+};
+
+const getFontFamily = (name?: string) => {
+  if (!name || name === "SystemFont") {
+    return "'Noto Sans Devanagari', 'Arial Unicode MS', sans-serif";
   }
-  return chunks;
+  const loader = fontLoaders[name];
+  if (loader) {
+    try {
+      return loader();
+    } catch (e) {
+      console.warn("Failed to load font:", name, e);
+    }
+  }
+  return "'Noto Sans Devanagari', 'Arial Unicode MS', sans-serif";
+};
+
+// ─── Config ────────────────────────────────────────────────
+const HIGHLIGHT_COLOR = "#FFD700";
+const DEFAULT_COLOR = "#ffffff";
+
+// ─── Converter ─────────────────────────────────────────────
+function wordTimestampsToCaptions(words: WordTimestamp[]): Caption[] {
+  return words.map((w) => ({
+    text: " " + w.word,      // Leading space required by createTikTokStyleCaptions
+    startMs: w.start * 1000,
+    endMs: w.end * 1000,
+    timestampMs: ((w.start + w.end) / 2) * 1000,
+    confidence: null,
+  }));
 }
 
-interface Props {
-  wordTimestamps: WordTimestamp[];
-}
-
-export const CaptionOverlay: React.FC<Props> = ({ wordTimestamps }) => {
+// ─── Single Page ───────────────────────────────────────────
+const CaptionPage: React.FC<{
+  page: TikTokPage;
+  height: number;
+  fontFamily: string;
+}> = ({ page, height, fontFamily }) => {
   const frame = useCurrentFrame();
-  const { fps, width, height } = useVideoConfig();
-  const currentSec = frame / fps;
+  const { fps } = useVideoConfig();
+  const currentTimeMs = (frame / fps) * 1000;
+  const absoluteTimeMs = page.startMs + currentTimeMs;
 
-  const chunks = buildChunks(wordTimestamps);
-  const activeChunk = chunks.find(
-    (c) => currentSec >= c.chunkStart && currentSec <= c.chunkEnd
-  );
-
-  if (!activeChunk) return null;
-
-  const activeWordIdx = activeChunk.starts.findIndex(
-    (s, i) => currentSec >= s && currentSec <= activeChunk.ends[i]
-  );
+  // Find last spoken word as fallback (anti-flicker)
+  let lastSpokenIdx = -1;
+  for (let i = 0; i < page.tokens.length; i++) {
+    if (page.tokens[i].fromMs <= absoluteTimeMs) {
+      lastSpokenIdx = i;
+    }
+  }
 
   const marginBottom = Math.round(height * 0.08);
-  const fontSize = Math.round(height * 0.028); // ~54px at 1920h
+  const fontSize = Math.round(height * 0.032);
 
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
@@ -61,27 +89,82 @@ export const CaptionOverlay: React.FC<Props> = ({ wordTimestamps }) => {
           display: "flex",
           justifyContent: "center",
           flexWrap: "wrap",
-          gap: "0 10px",
+          gap: "0 6px",
           padding: "0 40px",
+          whiteSpace: "pre",
         }}
       >
-        {activeChunk.words.map((word, i) => (
-          <span
-            key={i}
-            style={{
-              color: i === activeWordIdx ? "#FFD700" : "#ffffff",
-              fontSize,
-              fontWeight: 700,
-              fontFamily: "'Noto Sans Devanagari', 'Arial Unicode MS', sans-serif",
-              textShadow:
-                "2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000",
-              lineHeight: 1.3,
-            }}
-          >
-            {word}
-          </span>
-        ))}
+        {page.tokens.map((token, i) => {
+          const isActive =
+            token.fromMs <= absoluteTimeMs && token.toMs > absoluteTimeMs;
+          const isFallback = !isActive && i === lastSpokenIdx;
+
+          return (
+            <span
+              key={token.fromMs}
+              style={{
+                color: isActive || isFallback ? HIGHLIGHT_COLOR : DEFAULT_COLOR,
+                fontSize,
+                fontWeight: 700,
+                fontFamily,
+                textShadow:
+                  "2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000",
+                lineHeight: 1.3,
+              }}
+            >
+              {token.text}
+            </span>
+          );
+        })}
       </div>
+    </AbsoluteFill>
+  );
+};
+
+// ─── Main Overlay ──────────────────────────────────────────
+interface Props {
+  wordTimestamps: WordTimestamp[];
+  captionCombineMs?: number;
+  fontFamily?: string;
+}
+
+export const CaptionOverlay: React.FC<Props> = ({
+  wordTimestamps,
+  captionCombineMs = 1500,
+  fontFamily: rawFontFamily,
+}) => {
+  const { fps, height } = useVideoConfig();
+
+  const fontFamily = useMemo(() => getFontFamily(rawFontFamily), [rawFontFamily]);
+
+  const pages = useMemo(() => {
+    const captions = wordTimestampsToCaptions(wordTimestamps);
+    const { pages } = createTikTokStyleCaptions({
+      captions,
+      combineTokensWithinMilliseconds: captionCombineMs,
+    });
+    return pages;
+  }, [wordTimestamps, captionCombineMs]);
+
+  return (
+    <AbsoluteFill>
+      {pages.map((page, index) => {
+        const nextPage = pages[index + 1] ?? null;
+        const startFrame = Math.round((page.startMs / 1000) * fps);
+        const endFrame = Math.min(
+          nextPage ? Math.round((nextPage.startMs / 1000) * fps) : Infinity,
+          startFrame + Math.round((captionCombineMs / 1000) * fps),
+        );
+        const durationInFrames = endFrame - startFrame;
+
+        if (durationInFrames <= 0) return null;
+
+        return (
+          <Sequence key={index} from={startFrame} durationInFrames={durationInFrames}>
+            <CaptionPage page={page} height={height} fontFamily={fontFamily} />
+          </Sequence>
+        );
+      })}
     </AbsoluteFill>
   );
 };

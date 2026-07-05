@@ -29,6 +29,8 @@ export interface HealthVideoProps {
   bellSoundPath?: string | null;
   transitionsEnabled: boolean;
   transitionDurationFrames: number;
+  captionCombineMs?: number;
+  fontFamily?: string;
 }
 
 export interface EDLEntry {

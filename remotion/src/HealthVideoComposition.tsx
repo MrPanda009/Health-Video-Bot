@@ -33,9 +33,12 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
     outroPath,
     clickSoundPath,
     bellSoundPath,
+    captionCombineMs,
+    fontFamily,
   } = props;
 
   const { width, height } = useVideoConfig();
+  const disclaimerFrames = fps * 3;
 
   // Subscribe button appears in the last 7 seconds
   const subscribeStartFrame = Math.max(0, totalDurationInFrames - fps * 7);
@@ -97,18 +100,28 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
       {/* Video track */}
       <Series>{seriesItems}</Series>
 
-      {/* Voiceover — full duration */}
-      <Audio src={voiceoverPath} />
+      {/* Voiceover — starts after disclaimer */}
+      <Sequence from={disclaimerFrames}>
+        <Audio src={voiceoverPath} />
+      </Sequence>
 
       {/* Background music at 15% */}
-      {backgroundMusicPath && (
-        <Audio src={backgroundMusicPath} volume={0.15} />
-      )}
+      <Sequence from={disclaimerFrames}>
+        {backgroundMusicPath && (
+          <Audio src={backgroundMusicPath} volume={0.15} />
+        )}
+      </Sequence>
 
       {/* Word-highlighted captions */}
-      {wordTimestamps && wordTimestamps.length > 0 && (
-        <CaptionOverlay wordTimestamps={wordTimestamps} />
-      )}
+      <Sequence from={disclaimerFrames}>
+        {wordTimestamps && wordTimestamps.length > 0 && (
+          <CaptionOverlay
+            wordTimestamps={wordTimestamps}
+            captionCombineMs={captionCombineMs}
+            fontFamily={fontFamily}
+          />
+        )}
+      </Sequence>
 
       {/* Animated subscribe button near the end */}
       <Sequence from={subscribeStartFrame} durationInFrames={subscribeDuration}>
