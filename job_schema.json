@@ -76,6 +76,17 @@
                 "estimated_start_seconds": "int"
             }
         ],
+        "chart_data": {
+            "chart_type": "string — bar | radial | none",
+            "title": "string — Hindi label",
+            "metrics": [
+                {
+                    "label": "string",
+                    "value": "float",
+                    "unit": "string"
+                }
+            ]
+        },
         "validation_passed": "bool",
         "validation_notes": "list of strings — any warnings from Pydantic validation"
     },

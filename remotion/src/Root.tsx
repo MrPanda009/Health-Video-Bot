@@ -12,6 +12,13 @@ const defaultHealthProps: HealthVideoProps = {
   totalDurationInFrames: 2700, // 90s
   disclaimerText:
     "This video is for educational purposes only. Consult your doctor before making any health decisions.",
+  disclaimerTextHindi: "यह वीडियो केवल शैक्षिक उद्देश्यों के लिए है। किसी भी स्वास्थ्य संबंधी निर्णय के लिए अपने चिकित्सक से परामर्श लें।",
+  disclaimerTextEnglish: "This video is for educational purposes only. Consult your doctor before making any health decisions.",
+  citationText: "PMID: 12345678",
+  showBorderFrame: true,
+  citationWatermarkEnabled: true,
+  brandPrimaryColor: "#FFD700",
+  chartData: null,
   segments: [
     {
       name: "hook",

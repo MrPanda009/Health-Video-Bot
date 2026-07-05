@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import {
   AbsoluteFill,
   Audio,
@@ -13,6 +13,8 @@ import { BRollSegment } from "./components/BRollSegment";
 import { ScreenshotOverlay } from "./components/ScreenshotOverlay";
 import { CaptionOverlay } from "./components/CaptionOverlay";
 import { SubscribeButton } from "./components/SubscribeButton";
+import { DynamicChart } from "./components/DynamicChart";
+import { getFontFamily } from "./utils/fontLoader";
 
 const coverStyle: React.CSSProperties = {
   width: "100%",
@@ -24,7 +26,13 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
   const {
     fps,
     totalDurationInFrames,
-    disclaimerText,
+    disclaimerTextHindi,
+    disclaimerTextEnglish,
+    citationText,
+    showBorderFrame = true,
+    citationWatermarkEnabled = true,
+    brandPrimaryColor = "#FFD700",
+    chartData,
     segments,
     voiceoverPath,
     backgroundMusicPath,
@@ -39,6 +47,8 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
 
   const { width, height } = useVideoConfig();
   const disclaimerFrames = fps * 3;
+
+  const resolvedFontFamily = useMemo(() => getFontFamily(fontFamily), [fontFamily]);
 
   // Subscribe button appears in the last 7 seconds
   const subscribeStartFrame = Math.max(0, totalDurationInFrames - fps * 7);
@@ -57,7 +67,12 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
 
   seriesItems.push(
     <Series.Sequence key="disclaimer" durationInFrames={fps * 3}>
-      <DisclaimerCard text={disclaimerText} />
+      <DisclaimerCard
+        textHindi={disclaimerTextHindi}
+        textEnglish={disclaimerTextEnglish}
+        fontFamily={fontFamily}
+        brandPrimaryColor={brandPrimaryColor}
+      />
     </Series.Sequence>
   );
 
@@ -76,12 +91,21 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
             screenshotDisplayFrames={screenshotDisplayFrames}
           />
         ) : (
-          <BRollSegment
-            brollPaths={seg.brollPaths}
-            animationType={seg.animationType}
-            brollCutIntervalFrames={seg.brollCutIntervalFrames}
-            durationInFrames={seg.durationInFrames}
-          />
+          <AbsoluteFill>
+            <BRollSegment
+              brollPaths={seg.brollPaths}
+              animationType={seg.animationType}
+              brollCutIntervalFrames={seg.brollCutIntervalFrames}
+              durationInFrames={seg.durationInFrames}
+            />
+            {seg.name === "finding" && chartData && (
+              <DynamicChart
+                chartData={chartData}
+                brandPrimaryColor={brandPrimaryColor}
+                fontFamily={fontFamily}
+              />
+            )}
+          </AbsoluteFill>
         )}
       </Series.Sequence>
     );
@@ -99,6 +123,43 @@ export const HealthVideoComposition: React.FC<HealthVideoProps> = (props) => {
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
       {/* Video track */}
       <Series>{seriesItems}</Series>
+
+      {/* Brand Border Frame Overlay */}
+      {showBorderFrame && (
+        <AbsoluteFill
+          style={{
+            pointerEvents: "none",
+            border: `10px solid ${brandPrimaryColor}1a`, // subtle 10% opacity frame
+            boxSizing: "border-box",
+            zIndex: 90,
+          }}
+        />
+      )}
+
+      {/* Permanent Research Citation Watermark Overlay — visible after disclaimer */}
+      {citationWatermarkEnabled && citationText && (
+        <Sequence from={disclaimerFrames}>
+          <div
+            style={{
+              position: "absolute",
+              top: "35px",
+              right: "35px",
+              backgroundColor: "rgba(0, 0, 0, 0.45)",
+              color: "rgba(255, 255, 255, 0.55)",
+              padding: "6px 12px",
+              borderRadius: "8px",
+              fontSize: "13px",
+              fontWeight: 600,
+              fontFamily: resolvedFontFamily,
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              pointerEvents: "none",
+              zIndex: 95,
+            }}
+          >
+            {citationText}
+          </div>
+        </Sequence>
+      )}
 
       {/* Voiceover — starts after disclaimer */}
       <Sequence from={disclaimerFrames}>

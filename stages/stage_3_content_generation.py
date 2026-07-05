@@ -89,6 +89,18 @@ class ChapterTimestamp(BaseModel):
     estimated_start_seconds: int
 
 
+class ChartMetric(BaseModel):
+    label: str                    # e.g. "Mediterranean Diet" or "Before"
+    value: float                  # e.g. 22.0
+    unit: str                     # e.g. "%" or "mg/dL"
+
+
+class ChartData(BaseModel):
+    chart_type: str               # "bar" | "radial" | "none"
+    title: str                    # e.g., "हृदय रोग का ख़तरा" (Hindi)
+    metrics: list[ChartMetric]
+
+
 class ContentBlock(BaseModel):
     """Full content output — written into job content{} block."""
     hindi_script: str
@@ -99,6 +111,7 @@ class ContentBlock(BaseModel):
     broll_search_tags: list[BrollTagSet]
     thumbnail_prompts: list[ThumbnailPrompt]
     chapter_timestamps: list[ChapterTimestamp]
+    chart_data: Optional[ChartData] = None
     validation_passed: bool = True
     validation_notes: list[str] = Field(default_factory=list)
 
@@ -267,6 +280,11 @@ def build_content_prompt(study: dict, claims: dict, profile: dict) -> str:
     # Build the prompt
     return f"""You are an expert Hindi health science communicator. Generate a complete YouTube Shorts video package based on the research below.
 
+⚠ CONVERSATIONAL TONE & PERSONAL NARRAION REQUIREMENT ⚠
+- The hindi_script must be written in the FIRST PERSON as a personal narrator (e.g., "मैंने हाल ही में एक research paper पढ़ा...", "जब मैंने इस study को देखा, तो मैं हैरान रह गया...", "क्या आपको पता है...").
+- Do NOT make the script sound like a robotic text reading or a formal presentation. Speak directly, like a knowledgeable friend.
+- Ingest conversational elements: use brief rhetorical questions (e.g., "क्या आपको लगता है?", "लेकिन यहाँ एक twist है...") and conversational transition cues.
+
 ⚠ CRITICAL LANGUAGE REQUIREMENT ⚠
 {script_language_instruction}
 This is non-negotiable. Hindi words must always be in Devanagari. English words that modern Hindi speakers say out loud (medical OR everyday: 'study', 'diet', 'lifestyle', 'ok', 'actually', 'basically') must stay in Roman — never substitute them with Sanskrit equivalents.
@@ -305,8 +323,9 @@ Terminology rules:
 ABSOLUTE PROHIBITIONS (never violate these):
 {chr(10).join('- ' + p for p in profile['script']['absolute_prohibitions'])}
 
-STATISTICS RULE:
-The viewer is NOT a scientist. Present at most 2-3 numbers in the ENTIRE script and only as simple percentages or plain fractions — e.g. "22% कम risk" or "3 गुना ज़्यादा". NEVER use RR, OR, HR, SMD, confidence intervals, p-values, or any notation like "(RR = 0.78)" in the spoken script. Pick the single most striking percentage from the study to anchor the finding, and use at most 1-2 supporting numbers. The audience tunes out after the third number.
+STATISTICS & CHART DATA RULE:
+- The viewer is NOT a scientist. Present at most 2-3 numbers in the ENTIRE script and only as simple percentages or plain fractions — e.g. "22% कम risk" or "3 गुना ज़्यादा". NEVER use RR, OR, HR, SMD, confidence intervals, p-values, or any notation like "(RR = 0.78)" in the spoken script. Pick the single most striking percentage from the study to anchor the finding, and use at most 1-2 supporting numbers.
+- If the study contains clear quantitative comparison data (e.g., comparing groups, before/after values, or risk reductions), you MUST populate the `chart_data` field with these metrics so we can automatically render an animated SVG chart. If no quantitative comparison data exists, set `chart_data` to `null`.
 
 LANGUAGE RULE:
 {causal_rule}{small_study_note}{below_minimum_note}{funding_note}
@@ -388,7 +407,7 @@ The JSON must match this exact structure:
 
   "title": "Hindi YouTube title, under 60 characters",
 
-  "description": "Full YouTube description in Hindi and English. Must include:\\n1. 2-line video summary\\n2. Study citation: {citation}\\n3. Study link: {study_url}\\n4. Medical disclaimer: {disclaimer_hindi} | {disclaimer_english}\\n5. AI disclosure: {ai_disclosure}\\n6. Subscribe CTA",
+  "description": "Full YouTube description in Hindi and English. Must include:\\n1. 2-line video summary\\n2. A section titled '🔍 SOURCE STUDY:' containing the study citation: {citation} and the direct clickable link: {study_url}\\n3. Medical disclaimer: {disclaimer_hindi} | {disclaimer_english}\\n4. AI disclosure: {ai_disclosure}\\n5. Subscribe CTA",
 
   "tags": ["...25-35 tags total: see TAG RULES below..."],
 
@@ -441,7 +460,24 @@ The JSON must match this exact structure:
     {{"title": "What This Doesn't Mean", "estimated_start_seconds": 35}},
     {{"title": "What You Can Do", "estimated_start_seconds": 45}},
     {{"title": "Summary", "estimated_start_seconds": 52}}
-  ]
+  ],
+
+  "chart_data": {{
+    "chart_type": "bar",
+    "title": "हृदय रोग का ख़तरा",
+    "metrics": [
+      {{
+        "label": "Before",
+        "value": 45.0,
+        "unit": "%"
+      }},
+      {{
+        "label": "After",
+        "value": 22.0,
+        "unit": "%"
+      }}
+    ]
+  }}
 }}
 
 IMPORTANT REMINDERS before you write:
@@ -453,7 +489,8 @@ IMPORTANT REMINDERS before you write:
 6. B-roll search terms must be in English (for Pexels/Pixabay)
 7. Title and description must be in Hindi (or bilingual for description)
 8. SPECIFICITY RULE: The finding segment MUST name each specific intervention individually by name (e.g. 'Mediterranean diet', 'aerobic exercise', '7-8 ghante ki neend'). Never say 'lifestyle changes', 'healthy habits', or 'behtar jeevan shaili' without naming EXACTLY what those changes are. The specific interventions from this study are: {', '.join(claims.get('specific_interventions', [])) or 'derive these from the abstract above'}.
-9. WORD COUNT RULE: The total hindi_script must be at least {profile['script']['minimum_word_count']} words. Target {profile['script']['target_word_count_hindi']} words. Each segment has a target: {'; '.join(f"{s['name']} ~{s.get('target_word_count', '?')} words" for s in profile['script']['segment_structure'])}. The finding segment is the most important — write it fully, do not truncate.{below_minimum_reminder}"""
+9. WORD COUNT RULE: The total hindi_script must be at least {profile['script']['minimum_word_count']} words. Target {profile['script']['target_word_count_hindi']} words. Each segment has a target: {'; '.join(f"{s['name']} ~{s.get('target_word_count', '?')} words" for s in profile['script']['segment_structure'])}. The finding segment is the most important — write it fully, do not truncate.
+10. CHART DATA: Extract 2-3 key metrics for visual comparison. If no comparison data, set chart_data to null. Keep label short (max 2 words, Hinglish or Hindi, e.g. "Walk karne se", "Chai peene se"). value must be numeric only.{below_minimum_reminder}"""
 
 
 # ─── LLM call ─────────────────────────────────────────────────────────────────

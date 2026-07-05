@@ -4,6 +4,18 @@ export interface WordTimestamp {
   end: number;   // seconds
 }
 
+export interface ChartMetric {
+  label: string;
+  value: number;
+  unit: string;
+}
+
+export interface ChartData {
+  chartType: "bar" | "radial" | "none";
+  title: string;
+  metrics: ChartMetric[];
+}
+
 export interface SegmentProps {
   name: string;
   durationInFrames: number;
@@ -19,6 +31,13 @@ export interface HealthVideoProps {
   fps: number;
   totalDurationInFrames: number;
   disclaimerText: string;
+  disclaimerTextHindi: string;
+  disclaimerTextEnglish: string;
+  citationText?: string | null;
+  showBorderFrame?: boolean;
+  citationWatermarkEnabled?: boolean;
+  brandPrimaryColor?: string;
+  chartData?: ChartData | null;
   segments: SegmentProps[];
   voiceoverPath: string;
   backgroundMusicPath?: string | null;

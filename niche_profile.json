@@ -125,7 +125,12 @@
             "Overweight people used to illustrate disease (avoid stigmatizing imagery)",
             "Hospital ICU or emergency settings unless directly relevant",
             "Stock photos of people faking illness"
-        ]
+        ],
+        "brand_font": "Poppins",
+        "brand_primary_color": "#FFD700",
+        "show_border_frame": true,
+        "citation_watermark_enabled": true,
+        "dynamic_charts_enabled": true
     },
     "thumbnail": {
         "dimensions": "1280x720",

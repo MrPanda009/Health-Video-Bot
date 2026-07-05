@@ -422,12 +422,36 @@ def build_remotion_props(
             whisper_segs = _realign_segments_to_script(whisper_segs, hindi_script)
     word_timestamps = _flatten_word_timestamps(whisper_segs) if whisper_segs else None
 
+    # Map chart data to camelCase for Remotion/TS
+    chart_data = job.get("content", {}).get("chart_data")
+    remap_chart_data = None
+    if chart_data and chart_data.get("chart_type") != "none":
+        remap_chart_data = {
+            "chartType": chart_data["chart_type"],
+            "title": chart_data["title"],
+            "metrics": [
+                {
+                    "label": m["label"],
+                    "value": float(m["value"]),
+                    "unit": m["unit"]
+                }
+                for m in chart_data.get("metrics", [])
+            ]
+        }
+
     return {
         "width":                video_w,
         "height":               video_h,
         "fps":                  FPS,
         "totalDurationInFrames": total_frames,
         "disclaimerText":       profile["compliance"]["medical_disclaimer"]["text_english"],
+        "disclaimerTextHindi":  profile["compliance"]["medical_disclaimer"]["text_hindi"],
+        "disclaimerTextEnglish": profile["compliance"]["medical_disclaimer"]["text_english"],
+        "citationText":         f"PMID: {job.get('study', {}).get('pmid', '')}" if job.get('study', {}).get('pmid') else None,
+        "showBorderFrame":      profile.get("visuals", {}).get("show_border_frame", True),
+        "citationWatermarkEnabled": profile.get("visuals", {}).get("citation_watermark_enabled", True),
+        "brandPrimaryColor":    profile.get("visuals", {}).get("brand_primary_color", "#FFD700"),
+        "chartData":            remap_chart_data,
         "segments":             segments,
         "voiceoverPath":        voiceover_path,
         "backgroundMusicPath":  music_abs,
@@ -650,6 +674,10 @@ def run(
 ) -> dict:
     profile = load_niche_profile()
     job     = load_job(job_id)
+
+    # Fallback default font_family to profile brand_font
+    if font_family == "NotoSansDevanagari":
+        font_family = profile.get("visuals", {}).get("brand_font", font_family)
 
     errored_here = (
         job["status"] == "error"

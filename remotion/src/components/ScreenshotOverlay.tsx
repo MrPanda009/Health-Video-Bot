@@ -41,6 +41,21 @@ export const ScreenshotOverlay: React.FC<Props> = ({
   const ssWidth = Math.round(width * 0.8);
   const ssLeft = Math.round((width - ssWidth) / 2);
 
+  // Dynamic Ken Burns pan and scale animation over the display duration
+  const scale = interpolate(
+    frame,
+    [0, screenshotDisplayFrames],
+    [1.0, 1.15],
+    { extrapolateRight: "clamp" }
+  );
+
+  const translateY = interpolate(
+    frame,
+    [0, screenshotDisplayFrames],
+    [0, -25],
+    { extrapolateRight: "clamp" }
+  );
+
   return (
     <AbsoluteFill>
       <BRollSegment
@@ -58,14 +73,20 @@ export const ScreenshotOverlay: React.FC<Props> = ({
             transform: "translateY(-50%)",
             width: ssWidth,
             opacity: ssOpacity,
-            borderRadius: "12px",
+            borderRadius: "16px",
             overflow: "hidden",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+            border: "1.5px solid rgba(255, 255, 255, 0.15)",
+            boxShadow: "0 25px 50px rgba(0,0,0,0.7)",
           }}
         >
           <Img
             src={screenshotPath}
-            style={{ width: "100%", height: "auto", display: "block" }}
+            style={{
+              width: "100%",
+              height: "auto",
+              display: "block",
+              transform: `scale(${scale}) translateY(${translateY}px)`,
+            }}
           />
         </div>
       )}
