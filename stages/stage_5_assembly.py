@@ -278,35 +278,111 @@ def _realign_segments_to_script(segments: list, hindi_script: str) -> list:
     Replace the word text in whisper segments with tokens from hindi_script,
     preserving WhisperX timing. Called at render time so captions always match
     the current script even if stage 4d was not re-run after a stage 3 change.
+    Uses Needleman-Wunsch sequence alignment.
     """
-    all_whisper_words = [w for seg in segments for w in seg.get("words", [])]
-    n_wt = len(all_whisper_words)
+    # 1. Flatten whisper words and track their segment indices
+    whisper_words = []
+    for seg_idx, seg in enumerate(segments):
+        for w in seg.get("words", []):
+            whisper_words.append({
+                "word": w["word"],
+                "start": w["start"],
+                "end": w["end"],
+                "seg_idx": seg_idx
+            })
+
     script_tokens = hindi_script.split()
-    n_orig = len(script_tokens)
-    if n_orig == 0 or n_wt == 0:
+    M = len(script_tokens)
+    N = len(whisper_words)
+    if M == 0 or N == 0:
         return segments
 
-    aligned_flat = [
-        {
-            "word": script_tokens[min(round(i * n_orig / n_wt), n_orig - 1)],
-            "start": wt["start"],
-            "end": wt["end"],
-        }
-        for i, wt in enumerate(all_whisper_words)
-    ]
+    # 2. NW Alignment Dynamic Programming Setup
+    INS_COST = 2.0  # Extra whisper word (noise/filler)
+    DEL_COST = 2.0  # Skipped script word (unspoken/missed)
+    
+    DP = [[(float('inf'), (-1, -1)) for _ in range(N + 1)] for _ in range(M + 1)]
+    DP[0][0] = (0.0, (-1, -1))
+    
+    for i in range(1, M + 1):
+        DP[i][0] = (i * DEL_COST, (i - 1, 0))
+    for j in range(1, N + 1):
+        DP[0][j] = (j * INS_COST, (0, j - 1))
 
-    out, flat_idx = [], 0
-    for seg in segments:
-        count = len(seg.get("words", []))
-        seg_words = aligned_flat[flat_idx : flat_idx + count]
-        flat_idx += count
-        out.append({
-            "text": " ".join(w["word"] for w in seg_words),
+    for i in range(1, M + 1):
+        for j in range(1, N + 1):
+            w_orig = script_tokens[i - 1].lower()
+            w_whisp = whisper_words[j - 1]["word"].lower()
+
+            sub_cost = 0.0 if w_orig == w_whisp else 1.0
+            
+            # Diagonal preference: small penalty for path drift from center line
+            pos_penalty = 0.05 * abs((i - 1) / M - (j - 1) / N)
+            sub_cost += pos_penalty
+
+            # Option A: Match/Substitution
+            cost_sub = DP[i - 1][j - 1][0] + sub_cost
+            best_cost = cost_sub
+            best_parent = (i - 1, j - 1)
+
+            # Option B: Deletion (skip script word)
+            cost_del = DP[i - 1][j][0] + DEL_COST
+            if cost_del < best_cost:
+                best_cost = cost_del
+                best_parent = (i - 1, j)
+
+            # Option C: Insertion (skip whisper word)
+            cost_ins = DP[i][j - 1][0] + INS_COST
+            if cost_ins < best_cost:
+                best_cost = cost_ins
+                best_parent = (i, j - 1)
+
+            DP[i][j] = (best_cost, best_parent)
+
+    # 3. Backtrack alignment path
+    path = []
+    curr = (M, N)
+    while curr != (0, 0):
+        parent = DP[curr[0]][curr[1]][1]
+        path.append((curr, parent))
+        curr = parent
+    path.reverse()
+
+    # 4. Reconstruct aligned words
+    aligned_flat = []
+    for curr_cell, prev_cell in path:
+        if curr_cell[0] == prev_cell[0] + 1 and curr_cell[1] == prev_cell[1] + 1:
+            orig_idx = prev_cell[0]
+            whisp_idx = prev_cell[1]
+            aligned_flat.append({
+                "word": script_tokens[orig_idx],
+                "start": whisper_words[whisp_idx]["start"],
+                "end": whisper_words[whisp_idx]["end"],
+                "seg_idx": whisper_words[whisp_idx]["seg_idx"]
+            })
+
+    # 5. Distribute aligned words back to segment containers
+    aligned_segments = [
+        {
+            "text": "",
             "start": seg["start"],
             "end": seg["end"],
-            "words": seg_words,
+            "words": []
+        }
+        for seg in segments
+    ]
+    for w in aligned_flat:
+        s_idx = w["seg_idx"]
+        aligned_segments[s_idx]["words"].append({
+            "word": w["word"],
+            "start": w["start"],
+            "end": w["end"]
         })
-    return out
+
+    for seg in aligned_segments:
+        seg["text"] = " ".join(w["word"] for w in seg["words"])
+
+    return aligned_segments
 
 
 def _flatten_word_timestamps(segments: list) -> list[dict]:

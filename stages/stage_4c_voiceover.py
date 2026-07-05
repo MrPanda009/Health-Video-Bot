@@ -40,7 +40,7 @@ JOBS_DIR           = os.getenv("JOBS_DIR", "jobs")
 ASSETS_DIR         = os.getenv("ASSETS_DIR", "assets")
 
 SARVAM_TTS_URL  = "https://api.sarvam.ai/text-to-speech"
-SARVAM_CHUNK_MAX = 500  # Sarvam API limit per request (chars)
+SARVAM_CHUNK_MAX = 250  # Prevent bulbul:v3 API truncation on mixed scripts / symbols
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
